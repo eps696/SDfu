@@ -16,7 +16,6 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 import k_diffusion as K
 
-from util.text import multiencode
 from util.finetune import load_embeds, load_delta
 from util.utils import load_img, makemask, isok, isset, progbar
 
@@ -135,9 +134,6 @@ def sd_setup(a, vae=None, text_encoder=None, tokenizer=None, unet=None, schedule
     pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler).to(device).to("cuda")
     if isxf: pipe.enable_xformers_memory_efficient_attention()
 
-    uc_prompt = a.unprompt if isset(a, 'unprompt') and isinstance(a.unprompt, str) else ''
-    uc = multiencode(pipe, [(uc_prompt, 1.)]).repeat(a.batch, 1, 1)
-    
     vae_scale = 2 ** (len(vae.config.block_out_channels) - 1) # 8
     a.res = unet.config.sample_size * vae_scale # original model resolution
     a.depth = unet.in_channels==5
@@ -162,19 +158,19 @@ def sd_setup(a, vae=None, text_encoder=None, tokenizer=None, unet=None, schedule
         lats = vae.encode(image).latent_dist.sample() * vae.config.scaling_factor
         return torch.cat([lats])
     @precision_scope('cuda')
-    def lat_z(lat):
+    def lat_z(lat, cond=None):
         if a.ddim_inv: # ddim inversion, slower, ~exact
             for t in reversed(scheduler.timesteps):
                 with torch.no_grad():
-                    noise_pred = unet(lat, t, uc).sample
+                    noise_pred = unet(lat, t, cond).sample
                 lat = next_step_ddim(noise_pred, t, lat)
             return lat
         elif a.use_kdiff: # k-samplers, fast, not exact
             return lat + torch.randn_like(lat) * sigmas[0]
         else: # ddim stochastic encode, fast, not exact
             return scheduler.add_noise(lat, torch.randn(lat.shape, device=device, dtype=lat.dtype), lat_timestep)
-    def img_z(image):
-        return lat_z(img_lat(image))
+    def img_z(image, cond=None): # cond - for ddim inversion only
+        return lat_z(img_lat(image), cond)
     def rnd_z(H, W):
         shape_ = (a.batch, 4, H // vae_scale, W // vae_scale)
         lat = torch.randn(shape_, device=device)
@@ -210,17 +206,20 @@ def sd_setup(a, vae=None, text_encoder=None, tokenizer=None, unet=None, schedule
             return {'depth': dd} # [1,1,64,64]
         func.prep_depth = prep_depth
 
-    def generate(lat, c_, uc=uc, mask=None, masked_lat=None, depth=None, a=a, verbose=True):
+    def generate(lat, c_, uc, mask=None, masked_lat=None, depth=None, a=a, verbose=True):
         with torch.no_grad(), precision_scope('cuda'):
-            if c_.shape[0] < uc.shape[0] and uc.shape[0] % c_.shape[0] == 0:
-                c_ = c_.repeat(uc.shape[0] // c_.shape[0], 1, 1) # add batch
-            conds = torch.cat([uc, c_])
+            if a.batch > 1:
+                uc, c_ = uc.repeat(a.batch, 1, 1), c_.repeat(a.batch, 1, 1)
+            conds = uc if a.cfg_scale==0 else c_ if a.cfg_scale==1 else torch.cat([uc, c_])
 
             if a.use_kdiff:
                 def model_fn(x, t):
-                    lat_in, t = torch.cat([x]*2), torch.cat([t]*2)
-                    nz_uncond, nz_cond = kdiff_model(lat_in, t, cond=conds).chunk(2)
-                    noise_pred = nz_uncond + a.cfg_scale * (nz_cond - nz_uncond)
+                    if a.cfg_scale in [0, 1]:
+                        noise_pred = kdiff_model(x, t, cond=conds)
+                    else:
+                        lat_in, t = torch.cat([x]*2), torch.cat([t]*2)
+                        nz_uncond, nz_cond = kdiff_model(lat_in, t, cond=conds).chunk(2)
+                        noise_pred = nz_uncond + a.cfg_scale * (nz_cond - nz_uncond)
                     return noise_pred
                 lat = sampling_fn(model_fn, lat, sigmas)
                 if verbose: print() # compensate pbar printout
@@ -236,9 +235,12 @@ def sd_setup(a, vae=None, text_encoder=None, tokenizer=None, unet=None, schedule
                     elif isok(depth) and a.depth: # depth model
                         lat_in = torch.cat([lat_in, depth], dim=1)
 
-                    lat_in = torch.cat([lat_in] * 2) # expand latents for classifier free guidance
-                    nz_uncond, nz_cond = unet(lat_in, t, conds).sample.chunk(2) # pred noise residual at step t
-                    noise_pred = nz_uncond + a.cfg_scale * (nz_cond - nz_uncond) # guidance here
+                    if a.cfg_scale in [0, 1]:
+                        noise_pred = unet(lat_in, t, conds).sample # pred noise residual at step t # ..cross_attn_kwargs
+                    else:
+                        lat_in = torch.cat([lat_in] * 2) # expand latents for classifier free guidance
+                        nz_uncond, nz_cond = unet(lat_in, t, conds).sample.chunk(2) # pred noise residual at step t # ..cross_attn_kwargs
+                        noise_pred = nz_uncond + a.cfg_scale * (nz_cond - nz_uncond) # guidance here
 
                     lat = scheduler.step(noise_pred, t, lat, **sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
                     if verbose: pbar.upd(log)
@@ -250,5 +252,5 @@ def sd_setup(a, vae=None, text_encoder=None, tokenizer=None, unet=None, schedule
             lat /= vae.config.scaling_factor
             return vae.decode(lat).sample
 
-    return [a, func, pipe, generate, uc]
+    return [a, func, pipe, generate]
 

@@ -99,7 +99,7 @@ python src/gen.py -t "cosmic <mycat1> beast" --delta_ckpt mycat1.ckpt
 ```
 python src/gen.py -t "cosmic <mycat1> beast" --token_emb mycat1.pt
 ```
-Besides special tokens (e.g. `<depthmap>`), text prompts may include weights, controlled as numbers (like `good prompt :1 | also good prompt :1 | bad prompt :-0.5`) or with brackets (like `(good) [bad] ((even better)) [[even worse]]`).  
+Besides special tokens (e.g. `<depthmap>`), text prompts may include weights, controlled as numbers (like `good prompt :1 | also good prompt :1 | bad prompt :-0.5`) or with brackets (like `(good) [bad] ((even better)) [[even worse]]`) by the option `--parens`.  
 
 You can also run `python src/latwalk.py ...` with such arguments to make animations.
 

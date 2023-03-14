@@ -16,7 +16,7 @@ def get_args():
     parser.add_argument('-post','--postxt', default='', help='Postfix for input text')
     parser.add_argument('-im', '--in_img',  default=None, help='input image or directory with images (overrides width and height)')
     parser.add_argument('-M',  '--mask',    default=None, help='Path to input mask for inpainting mode (overrides width and height)')
-    parser.add_argument('-un','--unprompt', default=None, help='Negative prompt to be used as a neutral [uncond] starting point')
+    parser.add_argument('-un','--unprompt', default='', help='Negative prompt to be used as a neutral [uncond] starting point')
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
     parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
     # mandatory params
@@ -44,7 +44,8 @@ def get_args():
 @torch.no_grad()
 def main():
     a = get_args()
-    [a, func, pipe, generate, uc] = sd_setup(a)
+    [a, func, pipe, generate] = sd_setup(a)
+    uc = multiprompt(pipe, a.unprompt)[0][0]
 
     posttxt = basename(a.in_txt) if isset(a, 'in_txt') and os.path.exists(a.in_txt) else ''
     postimg = basename(a.in_img) if isset(a, 'in_img') and os.path.isdir(a.in_img)  else ''
@@ -90,13 +91,13 @@ def main():
                 gendict = {}
                 z_ = func.img_z(init_image)
 
-            images = generate(z_, c_, **gendict)
+            images = generate(z_, c_, uc, **gendict)
 
         else: # txt2img, full sampler
             file_out = '%s-m%s-%s-%d' % (log, a.model, a.sampler, a.seed)
             W, H = [a.res]*2 if size is None else size
             z_ = func.rnd_z(H, W)
-            images = generate(z_, c_)
+            images = generate(z_, c_, uc)
 
         outcount = images.shape[0]
         if outcount > 1:

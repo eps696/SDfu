@@ -25,7 +25,7 @@ def get_args():
     parser.add_argument('-post', '--postxt', default='', help='Postfix for input text')
     parser.add_argument('-im', '--in_img',  default=None, help='input image or directory with images (overrides width and height)')
     parser.add_argument('-M',  '--mask',    default=None, help='Path to input mask for inpainting mode (overrides width and height)')
-    parser.add_argument('-em', '--embeds',  default='_in/embed', help='Path to directories with embeddings')
+    parser.add_argument('-un','--unprompt', default='', help='Negative prompt to be used as a neutral [uncond] starting point')
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
     parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
     # mandatory params
@@ -57,7 +57,8 @@ def main():
     if isset(a, 'in_img') and os.path.isdir(a.in_img): # images slerp = full ddim sampling with inversion
         a.ddim_inv = True
 
-    [a, func, pipe, generate, uc] = sd_setup(a)
+    [a, func, pipe, generate] = sd_setup(a)
+    uc = multiprompt(pipe, a.unprompt)[0][0]
 
     os.makedirs(a.out_dir, exist_ok=True)
     size = None if a.size is None else calc_size(a.size, a.model, a.verbose) 
@@ -85,9 +86,9 @@ def main():
                 zs  = []
                 pbar = progbar(count)
                 for i in range(count):
-                    zs += [func.img_z(load_img(img_paths[i], size)[0])]
+                    zs += [func.img_z(load_img(img_paths[i], size)[0], uc)] # ddim inversion
                     if isset(a, 'out_lats'):
-                        images = generate(zs[-1], uc, verbose=False)
+                        images = generate(zs[-1], uc, uc, verbose=False) # test sample with cfg_scale = 0 or 1
                         save_img(images[0], i, a.out_dir, prefix=lat_dir)
                         with open(a.out_lats, 'wb') as f:
                             pickle.dump((torch.stack(zs)), f)
@@ -100,12 +101,12 @@ def main():
                 for j in range(a.fstep):
                     z_  = slerp(zs[i],           zs[(i+1) % count],   j / a.fstep)
                     c_  = slerp(cs[i % len(cs)], cs[(i+1) % len(cs)], j / a.fstep)
-                    images = generate(z_, c_)
+                    images = generate(z_, c_, uc)
                     if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
                     save_img(images[0], i*a.fstep+j, a.out_dir)
                     pbar.upd(uprows=2)
             if not a.loop:
-                images = generate(zs[count-1], c_)
+                images = generate(zs[count-1], c_, uc)
                 save_img(images[0], pcount*a.fstep, a.out_dir)
 
             exit()
@@ -145,17 +146,13 @@ def main():
             if z_ is None: zs += [func.rnd_z(H, W)] # [1,4,64,64] noise
 
             if isset(a, 'out_lats'):
-                images = generate(zs[-1], cs[i])
+                images = generate(zs[-1], cs[i], uc)
                 if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
                 save_img(images[0], i, a.out_dir, prefix=lat_dir)
                 with open(a.out_lats, 'wb') as f:
                     pickle.dump((torch.stack(zs), torch.stack(cs)), f) # [n,4,64,64] [n,77,768]
                 pbar.upd(uprows=2)
 
-        if isset(a, 'out_lats'): # save key lats & exit
-            print('zs', torch.stack(zs).shape, 'cs', torch.stack(cs).shape)
-            exit()
-        
     # run interpolation
     lerp_z = lerp if isset(a, 'in_img') and not a.inpaint else slerp # img_z => lerp, rnd_z => slerp
     pcount = count if a.loop else count-1
@@ -167,13 +164,13 @@ def main():
             z_ = lerp_z(zs[i % len(zs)], zs[(i+1) % len(zs)], tt)
             c_ =  slerp(cs[i % len(cs)], cs[(i+1) % len(cs)], tt)
 
-            images = generate(z_, c_, **gendict)
+            images = generate(z_, c_, uc, **gendict)
             if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
             save_img(images[0], i * a.fstep + f, a.out_dir)
             pbar.upd(uprows=2)
 
     if not a.loop:
-        images = generate(zs[pcount % len(zs)], cs[pcount % len(cs)], **gendict)
+        images = generate(zs[pcount % len(zs)], cs[pcount % len(cs)], uc, **gendict)
         save_img(images[0], pcount * a.fstep, a.out_dir)
 
 

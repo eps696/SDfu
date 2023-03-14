@@ -18,7 +18,7 @@ if %seq%==ok goto seq
 goto end
 
 :seq
-ffmpeg -y -v warning -i _out\%~n1\%%06d.jpg _out\%~n1-%2-%3%4%5%6%7%8%9.mp4
+ffmpeg -y -v warning -i _out\%~n1\%%05d.jpg _out\%~n1-%2-%3%4%5%6%7%8%9.mp4
 goto end
 
 :help
