@@ -32,9 +32,9 @@ def isset(a, *itms): # all exist, not None, not False, len > 0
             oks += [True]
     return all(oks)
 
-def cvshow(img_t):
+def cvshow(img_t, name='t'):
     img_np = torch.clip((img_t+1)*127.5, 0, 255).cpu().numpy().astype(np.uint8)
-    cv2.imshow('t', img_np[:,:,::-1])
+    cv2.imshow(name, img_np[:,:,::-1])
     cv2.waitKey(1)
 
 def calc_size(size, model, verbose=True):
@@ -71,6 +71,21 @@ def slerp(v0, v1, x, DOT_THRESHOLD=0.9995):
         s1 = sin_theta_t / sin_theta_0
         v2 = s0 * v0 + s1 * v1
     return v2
+
+def triblur(x, k=3, pow=1.0):
+    # padding = (k-1) // 2 # minimum padding to conv
+    padding = k # let's pad more to avoid border effects
+    b,c,h,w = x.shape
+    kernel = torch.linspace(-1,1,k+2)[1:-1].abs().neg().add(1).reshape(1,1,1,k).pow(pow).cuda().to(dtype=x.dtype)
+    kernel = kernel / kernel.sum()
+    x = x.reshape(b*c,1,h,w)
+    x = F.pad(x, (padding,padding,padding,padding), mode='reflect')
+    x = F.conv2d(x, kernel)
+    x = F.conv2d(x, kernel.permute(0,1,3,2))
+    p = (k+1)//2
+    x = x[:, :, p:-p, p:-p] # crop extra padding
+    x = x.reshape(b,c,h,w)
+    return x
 
 def load_img(path, size=None, tensor=True):
     image = Image.open(path).convert('RGB')

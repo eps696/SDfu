@@ -4,7 +4,7 @@ import argparse
 
 import torch
 
-from util.setup import sd_setup, models, samplers, device
+from util.sdsetup import SDfu, models, samplers, device
 from util.text import read_txt, multiprompt
 from util.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar
 
@@ -25,7 +25,6 @@ def get_args():
     parser.add_argument(       '--vae',     default='ema', help='orig, ema, mse')
     parser.add_argument('-C','--cfg_scale', default=13, type=float, help="prompt guidance scale")
     parser.add_argument('-f', '--strength', default=0.75, type=float, help="strength of image processing. 0 = preserve img, 1 = replace it completely")
-    parser.add_argument('-di','--ddim_inv', action='store_true', help='Use DDIM inversion for image latent encoding')
     parser.add_argument(      '--ddim_eta', default=0., type=float)
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
     parser.add_argument('--precision',      default='autocast')
@@ -44,14 +43,12 @@ def get_args():
 @torch.no_grad()
 def main():
     a = get_args()
-    [a, func, pipe, generate] = sd_setup(a)
-    uc = multiprompt(pipe, a.unprompt)[0][0]
+    sd = SDfu(a)
 
     posttxt = basename(a.in_txt) if isset(a, 'in_txt') and os.path.exists(a.in_txt) else ''
     postimg = basename(a.in_img) if isset(a, 'in_img') and os.path.isdir(a.in_img)  else ''
     if isok(posttxt) or isok(postimg):
-        a.out_dir = os.path.join(a.out_dir, posttxt + '-' + postimg)
-        a.out_dir += '-' + a.model
+        a.out_dir = os.path.join(a.out_dir, posttxt + '-' + postimg) + '-' + a.model
     os.makedirs(a.out_dir, exist_ok=True)
 
     size = None if not isset(a, 'size') else calc_size(a.size, a.model, a.verbose) 
@@ -59,7 +56,7 @@ def main():
 
     count = 0
     if isset(a, 'in_txt'):
-        cs, texts = multiprompt(pipe, a.in_txt, a.pretxt, a.postxt, a.parens)
+        cs, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.parens)
         count = max(count, len(cs))
 
     if isset(a, 'in_img'):
@@ -80,24 +77,24 @@ def main():
             log += ' .. %s' % os.path.basename(img_path)
             init_image, (W,H) = load_img(img_path, size)
 
-            if a.depth:
-                gendict = func.prep_depth(init_image)
-                z_ = func.img_z(init_image)
+            if sd.depthmod:
+                gendict = sd.prep_depth(init_image)
+                z_ = sd.img_z(init_image)
             elif isset(a, 'mask'):
                 log += ' / %s' % os.path.basename(masks[i % len(masks)])
-                gendict = func.prep_mask(masks[i % len(masks)], img_path, init_image)
-                z_ = func.rnd_z(H, W) if a.inpaint else func.img_z(init_image)
+                gendict = sd.prep_mask(masks[i % len(masks)], img_path, init_image)
+                z_ = sd.rnd_z(H, W) if sd.inpaintmod else sd.img_z(init_image)
             else: # standard img2img
                 gendict = {}
-                z_ = func.img_z(init_image)
+                z_ = sd.img_z(init_image)
 
-            images = generate(z_, c_, uc, **gendict)
+            images = sd.generate(z_, c_, **gendict)
 
         else: # txt2img, full sampler
             file_out = '%s-m%s-%s-%d' % (log, a.model, a.sampler, a.seed)
-            W, H = [a.res]*2 if size is None else size
-            z_ = func.rnd_z(H, W)
-            images = generate(z_, c_, uc)
+            W, H = [sd.res]*2 if size is None else size
+            z_ = sd.rnd_z(H, W)
+            images = sd.generate(z_, c_)
 
         outcount = images.shape[0]
         if outcount > 1:
