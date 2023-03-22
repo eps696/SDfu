@@ -152,9 +152,9 @@ class SDfu:
             self.feat_extractor = DPTFeatureExtractor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
 
 
-    def set_steps(self, steps, strength, warmup=1):
+    def set_steps(self, steps, strength=1., warmup=1, device=device):
         self.scheduler.set_timesteps(steps, device=device)
-        # if not isset(a, 'in_img'): strength = 1. # strength is also needed for feedback loops
+        if not isset(self.a, 'in_img'): strength = 1. # strength is also needed for feedback loops
         steps = min(int(steps * strength), steps) # t_enc .. 37
         if self.use_kdiff:
             self.sigmas = self.scheduler.sigmas[-steps - warmup :]
@@ -243,7 +243,7 @@ class SDfu:
             else:
                 log = 'gen sched %d, ts %d' % (len(self.scheduler.timesteps), len(self.timesteps))
                 if verbose: pbar = progbar(len(self.timesteps) - offset)
-                for i, t in enumerate(self.timesteps[offset:]):
+                for t in self.timesteps[offset:]:
                     lat_in = lat # scheduler.scale_model_input(lat, t) # scales only k-samplers! ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
 
                     if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model

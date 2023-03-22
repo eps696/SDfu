@@ -18,6 +18,7 @@ def get_args():
     parser.add_argument('-ol', '--out_lats', default=None, help='File to save keypoints for further interpolation')
     parser.add_argument('-fs', '--fstep',   default=25, type=int, help="number of frames for each interpolation step")
     parser.add_argument(       '--curve',   default='linear', help="Interpolating curve: bezier, parametric, custom or linear")
+    parser.add_argument('-lb', '--latblend', action='store_true', help='Use latent blending for smoother transitions')
     parser.add_argument(       '--loop',    action='store_true', help='Loop inputs [or stop at the last one]')
     # inputs & paths
     parser.add_argument('-t',  '--in_txt',  default=None, help='Text string or file to process')
@@ -34,7 +35,6 @@ def get_args():
     parser.add_argument(       '--vae',     default='ema', help='orig, ema, mse')
     parser.add_argument('-C','--cfg_scale', default=13, type=float, help="prompt guidance scale")
     parser.add_argument('-f', '--strength', default=0.75, type=float, help="strength of image processing. 0 = preserve img, 1 = replace it completely")
-    # parser.add_argument('-di',  '--ddim_inv', action='store_true', help='Use DDIM inversion for image latent encoding (slower but exact)')
     parser.add_argument(      '--ddim_eta', default=0., type=float)
     parser.add_argument('-s', '--steps',    default=50, type=int, help="number of diffusion steps")
     parser.add_argument(     '--precision', default='autocast')
@@ -53,8 +53,8 @@ def get_args():
 @torch.no_grad()
 def main():
     a = get_args()
-    # k-samplers don't work with concat-models here
-    if a.model[-1] in ['i', 'd'] \
+    # k-samplers don't work with concat-models or latent blending here
+    if a.model[-1] in ['i', 'd'] or a.latblend \
         or (isset(a, 'in_img') and os.path.isdir(a.in_img)): # images slerp = full ddim sampling with inversion
         a.sampler = 'ddim'
 
@@ -64,6 +64,11 @@ def main():
     size = None if a.size is None else calc_size(a.size, a.model, a.verbose) 
     gendict = {}
     if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.strength)
+
+    if a.latblend:
+        from util.latblend import LatentBlending
+        lb = LatentBlending(sd, a.steps, a.cfg_scale)
+        img_count = 0
 
     if isset(a, 'in_img'):
         if os.path.isdir(a.in_img): # interpolation between images
@@ -96,18 +101,27 @@ def main():
 
             print('.. interpolating ..')
             pcount = count if a.loop else count-1
-            pbar = progbar(pcount * a.fstep)
+            pbar = progbar(pcount if a.latblend else pcount * a.fstep)
             for i in range(pcount):
-                for j in range(a.fstep):
-                    z_  = slerp(zs[i],           zs[(i+1) % count],   j / a.fstep)
-                    c_  = slerp(cs[i % len(cs)], cs[(i+1) % len(cs)], j / a.fstep)
-                    images = sd.generate(z_, c_)
-                    if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
-                    save_img(images[0], i*a.fstep+j, a.out_dir)
+                if a.latblend:
+                    lb.init_lats(zs[i], zs[(i+1) % count])
+                    lb.set_conds(cs[i % len(cs)], cs[(i+1) % len(cs)])
+                    H, W = [sh * sd.vae_scale for sh in zs[i].shape[-2:]]
+                    lb.run_transition(W, H, t_compute_max = 2*a.fstep, reuse = i>0)
+                    img_count += lb.save_imgs(a.out_dir, img_count)
                     pbar.upd(uprows=2)
+                else:
+                    for j in range(a.fstep):
+                        z_  = slerp(zs[i],           zs[(i+1) % count],   j / a.fstep)
+                        c_  = slerp(cs[i % len(cs)], cs[(i+1) % len(cs)], j / a.fstep)
+                        images = sd.generate(z_, c_)
+                        if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
+                        save_img(images[0], i*a.fstep+j, a.out_dir)
+                        pbar.upd(uprows=2)
+                    img_count = pcount*a.fstep
             if not a.loop:
-                images = sd.generate(zs[count-1], c_)
-                save_img(images[0], pcount*a.fstep, a.out_dir)
+                images = sd.generate(zs[pcount], cs[pcount % len(cs)])
+                save_img(images[0], img_count, a.out_dir)
 
             exit()
 
@@ -156,22 +170,30 @@ def main():
     # run interpolation
     lerp_z = lerp if isset(a, 'in_img') and not sd.inpaintmod else slerp # img_z => lerp, rnd_z => slerp
     pcount = count if a.loop else count-1
-    pbar = progbar(pcount * a.fstep)
+    pbar = progbar(pcount if a.latblend else pcount * a.fstep)
     for i in range(pcount):
 
-        for f in range(a.fstep):
-            tt = blend(f / a.fstep, a.curve)
-            z_ = lerp_z(zs[i % len(zs)], zs[(i+1) % len(zs)], tt)
-            c_ =  slerp(cs[i % len(cs)], cs[(i+1) % len(cs)], tt)
-
-            images = sd.generate(z_, c_, **gendict)
-            if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
-            save_img(images[0], i * a.fstep + f, a.out_dir)
+        if a.latblend:
+            lb.init_lats(zs[i % len(zs)], zs[(i+1) % len(zs)])
+            lb.set_conds(cs[i % len(cs)], cs[(i+1) % len(cs)])
+            lb.run_transition(W, H, t_compute_max = 2*a.fstep, reuse = i>0)
+            img_count += lb.save_imgs(a.out_dir, img_count)
             pbar.upd(uprows=2)
+        else:
+            for f in range(a.fstep):
+                tt = blend(f / a.fstep, a.curve)
+                z_ = lerp_z(zs[i % len(zs)], zs[(i+1) % len(zs)], tt)
+                c_ =  slerp(cs[i % len(cs)], cs[(i+1) % len(cs)], tt)
+
+                images = sd.generate(z_, c_, **gendict)
+                if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
+                save_img(images[0], i * a.fstep + f, a.out_dir)
+                pbar.upd(uprows=2)
+            img_count = pcount*a.fstep
 
     if not a.loop:
         images = sd.generate(zs[pcount % len(zs)], cs[pcount % len(cs)], **gendict)
-        save_img(images[0], pcount * a.fstep, a.out_dir)
+        save_img(images[0], img_count, a.out_dir)
 
 
 if __name__ == '__main__':

@@ -4,13 +4,13 @@
 
 This is yet another Stable Diffusion compilation, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) as a convenient production tool, or [Deforum] for precisely controlled animations.  
 
-The code is based on the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [k-diffusion](https://github.com/crowsonkb/k-diffusion), [CLIPseg].  
+The code is based on the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [k-diffusion](https://github.com/crowsonkb/k-diffusion), [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
 There is also a [similar repo](https://github.com/eps696/SD), based on the [CompVis] and [Stability AI] libraries (may be less up-to-date).  
 
 Current functions:
 * Text to image
 * Image re- and in-painting
-* Various interpolations (between or upon images or text prompts)
+* Various interpolations (between/upon images or text prompts, smoothed by [latent blending])
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
@@ -71,8 +71,8 @@ python src/latwalk.py -t yourfile.txt -im _in/pix/alex-iby-G_Pk4D9rMLs.jpg --mas
 ```
 python src/latwalk.py -im _in/pix --cfg_scale 0 --strength 1
 ```
+Interpolations can be made smoother by adding `--latblend` option ([latent blending] technique). If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
 Check other options and their shortcuts by running these scripts with `--help` option.  
-Interpolated videos may be further smoothed out with [FILM](https://github.com/google-research/frame-interpolation).  
 
 There are also Windows bat-files, slightly simplifying and automating the commands. 
 
@@ -119,3 +119,4 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [CLIPseg]: <https://github.com/timojl/clipseg>
 [textual inversion]: <https://textual-inversion.github.io>
 [custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
+[latent blending]: <https://github.com/lunarring/latentblending>
