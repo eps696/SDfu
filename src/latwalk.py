@@ -107,7 +107,7 @@ def main():
                     lb.init_lats(zs[i], zs[(i+1) % count])
                     lb.set_conds(cs[i % len(cs)], cs[(i+1) % len(cs)])
                     H, W = [sh * sd.vae_scale for sh in zs[i].shape[-2:]]
-                    lb.run_transition(W, H, t_compute_max = 2*a.fstep, reuse = i>0)
+                    lb.run_transition(W, H, max_branches = a.fstep, reuse = i>0)
                     img_count += lb.save_imgs(a.out_dir, img_count)
                     pbar.upd(uprows=2)
                 else:
@@ -176,7 +176,7 @@ def main():
         if a.latblend:
             lb.init_lats(zs[i % len(zs)], zs[(i+1) % len(zs)])
             lb.set_conds(cs[i % len(cs)], cs[(i+1) % len(cs)])
-            lb.run_transition(W, H, t_compute_max = 2*a.fstep, reuse = i>0)
+            lb.run_transition(W, H, max_branches = a.fstep, reuse = i>0)
             img_count += lb.save_imgs(a.out_dir, img_count)
             pbar.upd(uprows=2)
         else:
