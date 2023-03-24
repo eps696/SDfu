@@ -25,8 +25,6 @@ try:
     import xformers; isxf = True
 except: isxf = False
 
-samplers = ['klms', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
-models = ['15', '15i', '2i', '2d', '21', '21v'] # !! only 15 is uncensored !!
 device = torch.device('cuda')
 
 class SDpipe(DiffusionPipeline):
@@ -93,7 +91,7 @@ class SDfu:
         if unet is None:
             unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
             unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16, local_files_only=True).to(device)
-        if not isxf: unet.set_attention_slice(unet.config.attention_head_dim // 2) # 8
+        if not isxf and isinstance(unet.config.attention_head_dim, int): unet.set_attention_slice(unet.config.attention_head_dim // 2) # 8
         self.unet = unet
 
         if vae is None:
