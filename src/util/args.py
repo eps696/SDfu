@@ -26,8 +26,8 @@ def main_args():
     parser.add_argument('-b',  '--batch',   default=1, type=int, help="batch size")
     parser.add_argument('-S',  '--seed',    type=int, help="image seed")
     # finetuned stuff
-    parser.add_argument('-tt', "--token_emb", default=None, help="path to the text inversion embeddings file")
-    parser.add_argument('-dt', "--delta_ckpt", default=None, help="path to the custom diffusion delta checkpoint")
+    parser.add_argument('-tt', '--token_emb', default=None, help="path to the text inversion embeddings file")
+    parser.add_argument('-dt', '--delta_ckpt', default=None, help="path to the custom diffusion delta checkpoint")
     # misc
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
     parser.add_argument('-par', '--parens', action='store_true', help='Use modern prompt weighting with brackets (otherwise like a:1|b:2)')
