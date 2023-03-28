@@ -15,7 +15,7 @@ Current functions:
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
 * Add subject (new token + Unet delta) with [custom diffusion]
-* Finetune overall generation with [LoRA]
+* Add subject (new token + Unet delta) with [LoRA]
 
 Other features:
 * Memory efficient with `xformers` (hi res on 6gb VRAM GPU)
