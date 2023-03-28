@@ -1,5 +1,6 @@
 # reworked from 
 # https://github.com/huggingface/diffusers/blob/main/examples/textual_inversion/textual_inversion.py
+# https://github.com/huggingface/diffusers/blob/main/examples/dreambooth/train_dreambooth_lora.py
 # https://github.com/adobe-research/custom-diffusion
 
 import os
@@ -16,8 +17,11 @@ import transformers
 transformers.utils.logging.set_verbosity_warning()
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import StableDiffusionPipeline, AutoencoderKL, UNet2DConditionModel, DDIMScheduler
+# lora
+from diffusers.models.cross_attention import LoRACrossAttnProcessor
+from diffusers.loaders import AttnProcsLayers
 
-from util.finetune import FinetuneDataset, custom_diff, save_delta, load_delta, save_embeds
+from util.finetune import FinetuneDataset, custom_diff, save_delta, load_delta, save_lora, load_loras, save_embeds
 from util.utils import save_img, save_cfg, progbar
 
 import warnings
@@ -25,24 +29,26 @@ warnings.filterwarnings("ignore")
 
 parser = argparse.ArgumentParser()
 # inputs
-parser.add_argument("--type",           default="custom", choices=['text','custom'], help="Textual Inversion or Custom Diffusion?")
-parser.add_argument('-t', "--token",    default=None, help="special word(s) to invoke the embedding, separated by '+'")
-parser.add_argument("--term",           default=None, help="generic word(s), associating with that object or style, separated by '+'")
-parser.add_argument("--data",           default=None, help="folder containing target images")
-parser.add_argument("--term_data",      default=None, help="folder containing generic class images (priors for new token)")
-parser.add_argument('-st', "--style",   action='store_true', help="True = style, False = object")
-parser.add_argument('-m',  '--model',   default='15', choices=['12','14','15','21','21v'])
+parser.add_argument('--type',           default="custom", choices=['lora','text','custom'], help="LoRA, Textual Inversion or Custom Diffusion?")
+parser.add_argument('-t', '--token',    default=None, help="special word(s) to invoke the embedding, separated by '+'")
+parser.add_argument('--term',           default=None, help="generic word(s), associating with that object or style, separated by '+'")
+parser.add_argument('--data',           default=None, help="folder containing target images")
+parser.add_argument('--term_data',      default=None, help="folder containing generic class images (priors for new token)")
+parser.add_argument('-st', '--style',   action='store_true', help="True = style, False = object")
+parser.add_argument('-m',  '--model',   default='15', choices=['15','21','21v'])
 parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
-parser.add_argument('-r', "--delta_ckpt", default=None, help="path to the delta checkpoint to resume from")
-parser.add_argument('-o', "--out_dir",  default="train", help="Output directory")
+parser.add_argument('-rd', '--load_custom', default=None, help="path to the custom diffusion delta checkpoint to resume from")
+parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file to resume from")
+parser.add_argument('-o', '--out_dir',  default="train", help="Output directory")
 # train
 parser.add_argument('-b','--batch_size', default=1, type=int, help="batch size for training dataloader")
-parser.add_argument('-ts', "--train_steps", default=2000, type=int, help="Number of training steps")
-parser.add_argument("--save_step",      default=500, type=int, help="how often to save models and samples")
-parser.add_argument('-lo', "--low_mem", action="store_true", help="Use gradient checkpointing: less memory, slower training")
-parser.add_argument("--freeze_model",   default='crossattn_kv', help="set 'crossattn' to enable fine-tuning of all key, value, query matrices")
-parser.add_argument('-lr', "--lr",      default=1e-5, type=float, help="Initial learning rate") # 1e-3 ~ 5e-4 for text inv
-parser.add_argument("--scale_lr",       default=True, help="Scale learning rate by batch")
+parser.add_argument('-ts', '--train_steps', default=2000, type=int, help="Number of training steps")
+parser.add_argument('--save_step',      default=500, type=int, help="how often to save models and samples")
+parser.add_argument('-val', '--validate', action='store_true', help="Save test samples during training")
+parser.add_argument('-lo', '--low_mem', action='store_true', help="Use gradient checkpointing: less memory, slower training")
+parser.add_argument('--freeze_model',   default='crossattn_kv', help="set 'crossattn' to enable fine-tuning of all key, value, query matrices")
+parser.add_argument('-lr', '--lr',      default=1e-5, type=float, help="Initial learning rate") # 1e-3 ~ 5e-4 for text inv, 1e-4 for lora
+parser.add_argument('--scale_lr',       default=True, help="Scale learning rate by batch")
 parser.add_argument('-S',  '--seed',    default=None, type=int, help="A seed for reproducible training.")
 a = parser.parse_args()
 
@@ -53,6 +59,7 @@ if a.seed is not None:
     seed_everything(a.seed)
 
 def main():
+    a.out_dir = os.path.join(a.out_dir, '%s-%s-m%s' % (a.token, a.type, a.model))
     os.makedirs(a.out_dir, exist_ok=True)
     save_cfg(a, a.out_dir)
 
@@ -71,8 +78,10 @@ def main():
     scheduler    = DDIMScheduler.from_pretrained(sched_path)
     resolution = unet.config.sample_size * 2 ** (len(vae.config.block_out_channels) - 1)
 
-    if a.type=='custom' and a.delta_ckpt is not None and os.path.isfile(a.delta_ckpt):
-        load_delta(a.delta_ckpt, text_encoder, tokenizer, unet, freeze_model=a.freeze_model)
+    if a.type=='custom' and a.load_custom is not None:
+        _ = load_delta(torch.load(a.load_custom), unet, text_encoder, tokenizer, freeze_model=a.freeze_model)
+    elif a.type=='lora' and a.load_lora is not None:
+        _ = load_loras(torch.load(a.load_lora), unet, text_encoder, tokenizer)
 
     # parse inputs
     with_prior = a.term_data is not None and a.term is not None # Use generic terms as priors
@@ -102,7 +111,7 @@ def main():
     inputs = [{"caption": '%s %s' % (mod_tokens[i], init_tokens[i]), "term": init_tokens[i], "data": data_dirs[i]} for i in range(len(mod_tokens))]
     if with_prior:
         inputs = [{**inputs[i], "term_data": term_data_dirs[i]} for i in range(len(mod_tokens))]
-    train_dataset = FinetuneDataset(inputs, tokenizer, resolution, style=a.style, augment=True, flip=True)
+    train_dataset = FinetuneDataset(inputs, tokenizer, resolution, style=a.style, augment=True, add_caption = a.type=='lora', flip=True)
     def collate_fn(examples):
         input_ids = [example["instance_token_id"] for example in examples]
         images    = [example["instance_image"]    for example in examples]
@@ -115,8 +124,28 @@ def main():
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=a.batch_size, shuffle=True, collate_fn=collate_fn)
 
     # optimization
-    if a.type == 'text': # only new embedding(s)
+    if a.type == 'text': # text inversion: only new embedding(s)
         params_to_optimize = text_encoder.get_input_embeddings().parameters()
+    elif a.type == 'lora':
+        # attention processors => 32 layers
+        # 3x down blocks * 2x attn layers * 2x transformer layers = 12
+        # 1x mid blocks  * 2x attn layers * 1x transformer layers = 2
+        # 3x up blocks   * 2x attn layers * 3x transformer layers = 18
+        lora_attn_procs = {}
+        for name in unet.attn_processors.keys():
+            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
+            if name.startswith("mid_block"):
+                hidden_size = unet.config.block_out_channels[-1]
+            elif name.startswith("up_blocks"):
+                block_id = int(name[len("up_blocks.")])
+                hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+            elif name.startswith("down_blocks"):
+                block_id = int(name[len("down_blocks.")])
+                hidden_size = unet.config.block_out_channels[block_id]
+            lora_attn_procs[name] = LoRACrossAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim).to(device)
+        unet.set_attn_processor(lora_attn_procs)
+        lora_layers = AttnProcsLayers(unet.attn_processors)
+        params_to_optimize = itertools.chain(text_encoder.get_input_embeddings().parameters(), lora_layers.parameters())
     elif a.freeze_model == 'crossattn': # custom: embeddings & unet attention all
         params_to_optimize = itertools.chain(text_encoder.get_input_embeddings().parameters(), 
                                              [x[1] for x in unet.named_parameters() if 'attn2' in x[0]])
@@ -141,10 +170,14 @@ def main():
     text_encoder.text_model.encoder.requires_grad_(False)
     text_encoder.text_model.final_layer_norm.requires_grad_(False)
     text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
-    if a.type=='text':
+    if a.type=='lora':
+        unet.requires_grad_(False)
+        lora_layers.requires_grad_(True)
+        unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
+    elif a.type=='text':
         unet.requires_grad_(False)
         unet_dtype = weight_dtype
-    else:
+    elif a.type == 'custom':
         unet = custom_diff(unet, a.freeze_model)
         unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
         unet0 = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16) # required to compress delta
@@ -161,7 +194,7 @@ def main():
     print(f" steps {a.train_steps}, epochs {num_epochs}")
     pbar = progbar(a.train_steps)
     for epoch in range(num_epochs):
-        if a.type == 'custom': unet.train()
+        if a.type in ['lora', 'custom']: unet.train()
         text_encoder.train()
         for step, batch in enumerate(train_dataloader):
             latents = vae.encode(batch["images"].to(dtype=weight_dtype)).latent_dist.sample().detach()
@@ -198,34 +231,37 @@ def main():
 
             global_step += 1
             if global_step % a.save_step == 0:
+                save_path = os.path.join(a.out_dir, '%s-%s-%04d.pt' % (a.token, a.type, global_step))
                 if a.type == 'text':
-                    save_path = os.path.join(a.out_dir, '%s-%04d.pt' % (a.token, global_step))
                     save_embeds(save_path, text_encoder, mod_tokens, mod_tokens_id)
-                else:
-                    save_path = os.path.join(a.out_dir, '%s-%04d.ckpt' % (a.token, global_step))
-                    save_delta(save_path, text_encoder, unet, mod_tokens, mod_tokens_id, a.freeze_model, unet0=unet0)
+                elif a.type == 'custom':
+                    save_delta(save_path, unet, text_encoder, mod_tokens, mod_tokens_id, a.freeze_model, unet0=unet0)
+                elif a.type == 'lora':
+                    save_lora(save_path, lora_layers.state_dict(), text_encoder, mod_tokens, mod_tokens_id)
 
                 # test sample
-                pipetest = StableDiffusionPipeline(vae, text_encoder, tokenizer, unet, scheduler, None, None, False).to(device)
-                pipetest.set_progress_bar_config(disable=True)
-                generator = None if a.seed is None else torch.Generator(device=device).manual_seed(a.seed)
-                with torch.autocast("cuda"):
-                    for i, (mod_token, init_token) in enumerate(zip(mod_tokens, init_tokens)):
-                        prompt = 'photo of %s %s' % (mod_token, init_token)
-                        image = pipetest(prompt, num_inference_steps=50, generator=generator).images[0]
-                        image.save(os.path.join(a.out_dir, '%s-%04d.jpg' % (mod_token[1:-1], global_step)))
+                if a.validate:
+                    pipetest = StableDiffusionPipeline(vae, text_encoder, tokenizer, unet, scheduler, None, None, False).to(device)
+                    pipetest.set_progress_bar_config(disable=True)
+                    generator = None if a.seed is None else torch.Generator(device=device).manual_seed(a.seed)
+                    with torch.autocast("cuda"):
+                        for i, (mod_token, init_token) in enumerate(zip(mod_tokens, init_tokens)):
+                            prompt = 'photo of %s %s' % (mod_token, init_token)
+                            image = pipetest(prompt, num_inference_steps=50, generator=generator).images[0]
+                            image.save(os.path.join(a.out_dir, '%s-%04d.jpg' % (mod_token[1:-1], global_step)))
 
             pbar.upd("loss %.4g" % loss.detach().item())
 
             if global_step >= a.train_steps:
                 break
 
+    save_path = os.path.join(a.out_dir, '%s-%s.pt' % (a.token, a.type))
     if a.type == 'text':
-        save_path = os.path.join(a.out_dir, '%s.pt' % a.token)
         save_embeds(save_path, text_encoder, mod_tokens, mod_tokens_id)
-    else:
-        save_path = os.path.join(a.out_dir, '%s.ckpt' % a.token)
-        save_delta(save_path, text_encoder, unet, mod_tokens, mod_tokens_id, a.freeze_model)
+    elif a.type == 'custom':
+        save_delta(save_path, unet, text_encoder, mod_tokens, mod_tokens_id, a.freeze_model, unet0=unet0)
+    elif a.type == 'lora':
+        save_lora(save_path, lora_layers.state_dict(), text_encoder, mod_tokens, mod_tokens_id)
 
 
 if __name__ == "__main__":

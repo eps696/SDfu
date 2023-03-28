@@ -17,6 +17,7 @@ def get_args(parser):
     parser.add_argument('-fs', '--fstep',   default=25, type=int, help="number of frames for each interpolation step")
     parser.add_argument(       '--curve',   default='linear', help="Interpolating curve: bezier, parametric, custom or linear")
     parser.add_argument('-lb', '--latblend', action='store_true', help='Use latent blending for smoother transitions')
+    parser.add_argument('-n',  '--num',     default=1, type=int)
     parser.add_argument(       '--loop',    action='store_true', help='Loop inputs [or stop at the last one]')
     return parser.parse_args()
 
@@ -48,6 +49,7 @@ def main():
 
     else: # make new latents & conds
         cs, _ = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.parens, a.text_norm)
+        if a.num > 1: cs = cs * a.num
         count = len(cs)
 
         if isset(a, 'in_img'):

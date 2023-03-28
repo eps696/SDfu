@@ -6,12 +6,14 @@ import random
 import numpy as np
 from pathlib import Path
 from packaging import version
+from collections import defaultdict
 
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
 from diffusers.models.attention import CrossAttention
+from diffusers.models.cross_attention import LoRACrossAttnProcessor
 
 PIL_INTERPOLATION = PIL.Image.Resampling.BICUBIC if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0") else PIL.Image.BICUBIC
 
@@ -35,12 +37,37 @@ templates_style = [
     "nice painting in the style of {}",
 ]
 
+class Capturer():
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.dtype = torch.float16 if self.device == 'cuda' else torch.float32
+        self.max_len = 32
+
+        from transformers import AutoProcessor, BlipForConditionalGeneration # , Blip2ForConditionalGeneration
+        CAPTION_MODELS = {
+            'blip-base': 'Salesforce/blip-image-captioning-base',   # 990MB
+            'blip-large': 'Salesforce/blip-image-captioning-large', # 1.9GB
+            # 'blip2-2.7b': 'Salesforce/blip2-opt-2.7b',              # 15.5GB
+            # 'blip2-flan-t5-xl': 'Salesforce/blip2-flan-t5-xl',      # 15.77GB
+        }
+        model_path = CAPTION_MODELS['blip-base'] # 'blip-large' is too imaginative
+        model = BlipForConditionalGeneration.from_pretrained(model_path, torch_dtype=self.dtype) # Blip2ForConditionalGeneration
+        self.processor = AutoProcessor.from_pretrained(model_path)
+        self.model = model.eval().to(self.device)
+
+    def __call__(self, image):
+        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+        inputs = inputs.to(self.dtype)
+        tokens = self.model.generate(**inputs, max_new_tokens=self.max_len)
+        return self.processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
+
 class FinetuneDataset(Dataset):
-    def __init__(self, inputs, tokenizer, size=512, style=False, augment=True, flip=True):
+    def __init__(self, inputs, tokenizer, size=512, style=False, augment=True, add_caption=False, flip=True):
         self.size = size
         self.tokenizer = tokenizer
-        self.augment = augment
         self.style = style
+        self.augment = augment
+        self.add_caption = add_caption
         self.with_prior = 'term_data' in inputs[0]
 
         # pair = img + str
@@ -54,6 +81,9 @@ class FinetuneDataset(Dataset):
                 class_pairs = [(x, batch["term"]) for x in Path(batch["term_data"]).iterdir() if x.is_file()]
                 self.class_pairs.extend(class_pairs)
                 random.shuffle(self.class_pairs)
+        
+        if add_caption or any([p[1] is None for p in instance_pairs]):
+            self.captur = Capturer()
         
         self.inst_len = len(self.instance_pairs)
         self._length = self.inst_len
@@ -96,7 +126,7 @@ class FinetuneDataset(Dataset):
             else:
                 image = self.pil_scale_np(image, self.size)
                 epithet = ''
-            if aug_text:
+            if aug_text and caption is not None:
                 if self.style:
                     caption = np.random.choice(['', 'a ', 'the ']) + epithet + random.choice(templates_style).format(caption)
                 else:
@@ -109,6 +139,10 @@ class FinetuneDataset(Dataset):
     def __getitem__(self, index):
         batch = {}
         instance_img_tensor, caption = self.process_data(*self.instance_pairs[index % self.inst_len])
+        if caption is None:
+            caption = self.captur(instance_img_tensor)
+        elif self.add_caption:
+            caption += ', ' + self.captur(instance_img_tensor)
         batch["instance_image"] = instance_img_tensor
         batch["instance_token_id"] = self.tokenizer(caption, padding="do_not_pad", truncation=True, max_length=self.tokenizer.model_max_length).input_ids
         if self.with_prior:
@@ -222,7 +256,7 @@ def load_embeds(st_dict, text_encoder, tokenizer, token_str=None):
         token_embeds[id_new] = st_dict[mod_tokens[i]]
     return new_tokens
 
-def save_delta(save_path, text_encoder, unet, mod_tokens=None, mod_tokens_id=None, freeze_model='crossattn_kv', unet0=None, save_txt_enc=False, accelerator=None):
+def save_delta(save_path, unet, text_encoder, mod_tokens=None, mod_tokens_id=None, freeze_model='crossattn_kv', unet0=None, save_txt_enc=False, accelerator=None):
     if accelerator is not None:
         text_encoder = accelerator.unwrap_model(text_encoder)
         unet = accelerator.unwrap_model(unet)
@@ -244,7 +278,7 @@ def save_delta(save_path, text_encoder, unet, mod_tokens=None, mod_tokens_id=Non
         delta_dict = compress_delta(delta_dict, unet0, compression_ratio = 0.6) # compressed delta is on cuda, uncompressed on cpu
     torch.save(delta_dict, save_path)
 
-def load_delta(st, text_encoder, tokenizer, unet, token_str=None, compress=True, freeze_model='crossattn_kv'):
+def load_delta(st, unet, text_encoder, tokenizer, token_str=None, compress=True, freeze_model='crossattn_kv'):
     if 'text_encoder' in st:
         text_encoder.load_state_dict(st['text_encoder'])
     if 'modifier_token' in st:
@@ -292,4 +326,46 @@ def compress_delta(delta_dict, unet, compression_ratio = 0.6):
         else:
             compressed_st['unet'][f'{name}'] = st[name]
     return compressed_st
+
+def save_lora(save_path, lora_dict, text_encoder, mod_tokens=None, mod_tokens_id=None, save_txt_enc=False, accelerator=None):
+    if accelerator is not None:
+        text_encoder = accelerator.unwrap_model(text_encoder)
+        unet = accelerator.unwrap_model(unet)
+    out_dict = {}
+    if mod_tokens is not None:
+        out_dict['modifier_token'] = {}
+        for i in range(len(mod_tokens_id)):
+            learned_embeds = text_encoder.get_input_embeddings().weight[mod_tokens_id[i]]
+            out_dict['modifier_token'][mod_tokens[i]] = learned_embeds.detach().cpu()
+    elif save_txt_enc:
+        out_dict['text_encoder'] = text_encoder.state_dict()
+    if len(out_dict) > 0: # with embeddings/encoder
+        out_dict['unet'] = lora_dict
+    else: # only lora, as in the original
+        out_dict = lora_dict
+    torch.save(out_dict, save_path)
+
+def load_loras(st, unet, text_encoder=None, tokenizer=None, token_str=None):
+    new_tokens = None
+    if 'text_encoder' in st and text_encoder is not None:
+        text_encoder.load_state_dict(st['text_encoder'])
+    if 'modifier_token' in st and tokenizer is not None:
+        new_tokens = load_embeds(st['modifier_token'], text_encoder, tokenizer, token_str)
+    if 'unet' in st:
+        st = st['unet']
+    assert all("lora" in k for k in st.keys()), " !! loaded file does not look like LoRA !!"
+    attn_processors = {}
+    lora_grouped_dict = defaultdict(dict)
+    for key, value in st.items():
+        attn_processor_key, sub_key = ".".join(key.split(".")[:-3]), ".".join(key.split(".")[-3:])
+        lora_grouped_dict[attn_processor_key][sub_key] = value
+    for key, value_dict in lora_grouped_dict.items():
+        rank = value_dict["to_k_lora.down.weight"].shape[0]
+        cross_attention_dim = value_dict["to_k_lora.down.weight"].shape[1]
+        hidden_size = value_dict["to_k_lora.up.weight"].shape[0]
+        attn_processors[key] = LoRACrossAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, rank=rank)
+        attn_processors[key].load_state_dict(value_dict)
+    attn_processors = {k: v.to(device=unet.device, dtype=unet.dtype) for k, v in attn_processors.items()}
+    unet.set_attn_processor(attn_processors)
+    return new_tokens
 

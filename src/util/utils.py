@@ -6,8 +6,9 @@ import skimage
 import collections
 
 import torch
+import torch.nn.functional as F
 
-from util.txt2mask import Txt2Mask
+from .txt2mask import Txt2Mask
 
 device = torch.device('cuda')
 

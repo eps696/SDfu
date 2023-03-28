@@ -2,6 +2,9 @@ import argparse
 
 samplers = ['klms', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
 models = ['15', '15i', '2i', '2d', '21', '21v'] # !! only 15 is uncensored !!
+unprompt = ""
+# unprompt = "ugly, low quality, poorly drawn, out of focus, deformed, disfigured, disgusting, bad art, blurry, oversaturated"
+# unprompt += ", mutated, mutilated, bad anatomy, malformed hands, extra limbs"
 
 def main_args():
     parser = argparse.ArgumentParser(conflict_handler = 'resolve')
@@ -11,7 +14,7 @@ def main_args():
     parser.add_argument('-post','--postxt', default='', help='Postfix for input text')
     parser.add_argument('-im', '--in_img',  default=None, help='input image or directory with images (overrides width and height)')
     parser.add_argument('-M',  '--mask',    default=None, help='Path to input mask for inpainting mode (overrides width and height)')
-    parser.add_argument('-un','--unprompt', default='', help='Negative prompt to be used as a neutral [uncond] starting point')
+    parser.add_argument('-un','--unprompt', default=unprompt, help='Negative prompt to be used as a neutral [uncond] starting point')
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
     parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
     # mandatory params
@@ -26,8 +29,9 @@ def main_args():
     parser.add_argument('-b',  '--batch',   default=1, type=int, help="batch size")
     parser.add_argument('-S',  '--seed',    type=int, help="image seed")
     # finetuned stuff
-    parser.add_argument('-tt', '--token_emb', default=None, help="path to the text inversion embeddings file")
-    parser.add_argument('-dt', '--delta_ckpt', default=None, help="path to the custom diffusion delta checkpoint")
+    parser.add_argument('-rt', '--load_token', default=None, help="path to the text inversion embeddings file")
+    parser.add_argument('-rd', '--load_custom', default=None, help="path to the custom diffusion delta checkpoint")
+    parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file")
     # misc
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
     parser.add_argument('-par', '--parens', action='store_true', help='Use modern prompt weighting with brackets (otherwise like a:1|b:2)')

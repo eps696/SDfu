@@ -15,9 +15,9 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 import k_diffusion as K
 
-from util.text import multiprompt
-from util.finetune import load_embeds, load_delta
-from util.utils import load_img, makemask, isok, isset, progbar, file_list
+from .text import multiprompt
+from .finetune import load_embeds, load_delta, load_loras
+from .utils import load_img, makemask, isok, isset, progbar, file_list
 
 import logging
 logging.getLogger('diffusers').setLevel(logging.ERROR)
@@ -76,15 +76,6 @@ class SDfu:
             text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True).to(device)
         if tokenizer is None:
             tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True)
-        # load finetuned stuff
-        if  isset(a, 'delta_ckpt') and os.path.isfile(a.delta_ckpt): # custom diffusion
-            mod_tokens = load_delta(torch.load(a.delta_ckpt), text_encoder, tokenizer, unet)
-            print(' loaded tokens:', mod_tokens)
-        elif isset(a, 'token_emb') and os.path.exists(a.token_emb): # text inversion
-            emb_files = [a.token_emb] if os.path.isfile(a.token_emb) else file_list(a.token_emb, 'pt')
-            for emb_file in emb_files:
-                mod_tokens = load_embeds(torch.load(emb_file), text_encoder, tokenizer)
-                print(' loaded tokens:', mod_tokens)
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
 
@@ -102,6 +93,19 @@ class SDfu:
             vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16).to(device)
         if not isxf: vae.enable_slicing()
         self.vae = vae
+
+        # load finetuned stuff
+        mod_tokens = None
+        if  isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
+            mod_tokens = load_loras(torch.load(a.load_lora), unet, text_encoder, tokenizer)
+        elif  isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
+            mod_tokens = load_delta(torch.load(a.load_custom), unet, text_encoder, tokenizer)
+        elif isset(a, 'load_token') and os.path.exists(a.load_token): # text inversion
+            emb_files = [a.load_token] if os.path.isfile(a.load_token) else file_list(a.load_token, 'pt')
+            mod_tokens = []
+            for emb_file in emb_files:
+                mod_tokens += load_embeds(torch.load(emb_file), text_encoder, tokenizer)
+        if mod_tokens is not None: print(' loaded tokens:', mod_tokens[0] if len(mod_tokens)==1 else mod_tokens)
 
         if scheduler is None:
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
@@ -131,7 +135,7 @@ class SDfu:
         # sampling
         self.set_steps(a.steps, a.strength)
 
-        self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler).to(device).to("cuda")
+        self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler).to(device)
         if isxf: self.pipe.enable_xformers_memory_efficient_attention()
 
         uc_prompt = a.unprompt if isset(a, 'unprompt') else ''
@@ -225,6 +229,7 @@ class SDfu:
             if self.a.batch > 1:
                 uc, c_ = uc.repeat(self.a.batch, 1, 1), c_.repeat(self.a.batch, 1, 1)
             conds = uc if cfg_scale==0 else c_ if cfg_scale==1 else torch.cat([uc, c_])
+            if isset(self.a, 'load_lora') and isxf: conds = conds.float() # otherwise q/k/v mistype error
 
             if self.use_kdiff:
                 def model_fn(x, t):

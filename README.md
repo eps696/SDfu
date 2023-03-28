@@ -15,6 +15,7 @@ Current functions:
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
 * Add subject (new token + Unet delta) with [custom diffusion]
+* Finetune overall generation with [LoRA]
 
 Other features:
 * Memory efficient with `xformers` (hi res on 6gb VRAM GPU)
@@ -80,25 +81,36 @@ There are also Windows bat-files, slightly simplifying and automating the comman
 
 * Train new token embedding for a specific subject (e.g. cat) with [textual inversion]:
 ```
-python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.001
+python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.001 --type text
+```
+* Finetune the model (namely, part of the Unet attention layers) with [LoRA]:
+```
+python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.0001 --type lora
 ```
 * Do the same with [custom diffusion]:
 ```
-python src/train.py --token mycat1 --term cat --data data/mycat1 --term_data data/cat --low_mem
+python src/train.py --token mycat1 --term cat --data data/mycat1 --term_data data/cat --type custom
 ```
+Add `--style` if you're training for a style rather than an object. Add `--low_mem` if you get OOM.   
 Results of the trainings will be saved under `train` directory. 
 
-Custom diffusion trains faster and can achieve impressive reproduction quality (including faces) with simple similar prompts, but it can entirely lose the point if the prompt is complex or aside from the original category. To train it, you'll need both target reference images (`data/mycat1`) and more random images of similar subjects (`data/cat`). Apparently, you can generate the latter with SD itself.  
-Textual inversion is more generic but stable. Also, its embeddings can be easily combined without additional retraining.  
+Custom diffusion trains faster and can achieve impressive reproduction quality (including faces) with simple similar prompts, but it can lose the point on generation if the prompt is too complex or aside from the original category. To train it, you'll need both target reference images (`data/mycat1`) and more random images of similar subjects (`data/cat`). Apparently, you can generate the latter with SD itself.  
+LoRA finetuning seems less precise, while may interfere with wider spectrum of topics.  
+Textual inversion is more generic but stable. Also, its embeddings can be easily combined together on load.  
 
-* Generate image with embedding and delta weights from [custom diffusion]. The token is hardcoded in the file, so you need only to point the path to it:
+* Generate image with trained embedding and weights from [LoRA]:
 ```
-python src/gen.py -t "cosmic <mycat1> beast" --delta_ckpt mycat1.ckpt
+python src/gen.py -t "cosmic <mycat1> beast" --load_lora mycat1-lora.pt
+```
+* Same with [custom diffusion]:
+```
+python src/gen.py -t "cosmic <mycat1> beast" --load_custom mycat1-custom.pt
 ```
 * Same with [textual inversion] (you may provide a folder path to load few files at once):
 ```
-python src/gen.py -t "cosmic <mycat1> beast" --token_emb mycat1.pt
+python src/gen.py -t "cosmic <mycat1> beast" --load_token mycat1-text.pt
 ```
+
 Besides special tokens (e.g. `<depthmap>`), text prompts may include weights, controlled as numbers (like `good prompt :1 | also good prompt :1 | bad prompt :-0.5`) or with brackets (like `(good) [bad] ((even better)) [[even worse]]`) by the option `--parens`.  
 
 You can also run `python src/latwalk.py ...` with such arguments to make animations.
@@ -119,4 +131,5 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [CLIPseg]: <https://github.com/timojl/clipseg>
 [textual inversion]: <https://textual-inversion.github.io>
 [custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
+[LoRA]: <https://github.com/cloneofsimo/lora>
 [latent blending]: <https://github.com/lunarring/latentblending>

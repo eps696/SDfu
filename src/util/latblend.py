@@ -17,8 +17,7 @@ import torch
 torch.backends.cudnn.benchmark = False
 torch.set_grad_enabled(False)
 
-from util.utils import slerp, lerp, blend, cvshow
-from eps import progbar
+from .utils import slerp, lerp, blend, cvshow, progbar
 
 class LatentBlending():
     def __init__(self, sd, steps, cfg_scale=7, scale_mid_damper=0.5):

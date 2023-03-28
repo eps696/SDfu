@@ -11,6 +11,7 @@ from util.utils import load_img, save_img, calc_size, isok, isset, img_list, bas
 def get_args(parser):
     # override
     parser.add_argument('-sm', '--sampler', default='pndm', choices=samplers)
+    parser.add_argument('-n',  '--num',     default=1, type=int)
     return parser.parse_args()
 
 @torch.no_grad()
@@ -30,6 +31,7 @@ def main():
     count = 0
     if isset(a, 'in_txt'):
         cs, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.parens)
+        if a.num > 1: cs, texts = cs * a.num, texts * a.num
         count = max(count, len(cs))
 
     if isset(a, 'in_img'):
@@ -64,6 +66,8 @@ def main():
             images = sd.generate(z_, c_, **gendict)
 
         else: # txt2img, full sampler
+            if a.num > 1: 
+                a.seed = i
             file_out = '%s-m%s-%s-%d' % (log, a.model, a.sampler, a.seed)
             W, H = [sd.res]*2 if size is None else size
             z_ = sd.rnd_z(H, W)
@@ -71,8 +75,8 @@ def main():
 
         outcount = images.shape[0]
         if outcount > 1:
-            for i in range(outcount):
-                save_img(images[i], i, a.out_dir, filepath=file_out + '-%02d.jpg' % i)
+            for j in range(outcount):
+                save_img(images[j], j, a.out_dir, filepath=file_out + '-%02d.jpg' % j)
         else:
             save_img(images[0], 0, a.out_dir, filepath=file_out + '.jpg')
         pbar.upd(log, uprows=2)
