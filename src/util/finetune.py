@@ -56,6 +56,7 @@ class Capturer():
         self.model = model.eval().to(self.device)
 
     def __call__(self, image):
+        if torch.is_tensor(image): image = (image + 1.) / 2.
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         inputs = inputs.to(self.dtype)
         tokens = self.model.generate(**inputs, max_new_tokens=self.max_len)
