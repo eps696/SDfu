@@ -38,6 +38,8 @@ from torchvision import transforms
 CLIP_VERSION = 'ViT-B/16'
 CLIPSEG_SIZE = 352
 
+RESAMPLE = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
+
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), '../xtra'))
 
 from clipseg.clipseg import CLIPDensePredT
@@ -65,7 +67,7 @@ class SegmentedGrayscale(object):
     # unscales and uncrops the 352x352 heatmap so that it matches the image again
     def _rescale(self, heatmap:Image)->Image:
         size = self.image.width if (self.image.width > self.image.height) else self.image.height
-        resized_image = heatmap.resize((size,size), resample=Image.Resampling.LANCZOS)
+        resized_image = heatmap.resize((size,size), resample=RESAMPLE)
         return resized_image.crop((0,0,self.image.width,self.image.height))
 
 class Txt2Mask(object):
@@ -116,5 +118,5 @@ class Txt2Mask(object):
             scale = CLIPSEG_SIZE / image.width
         else:
             scale = CLIPSEG_SIZE / image.height
-        scaled_image.paste(image.resize((int(scale * image.width), int(scale * image.height)), resample=Image.Resampling.LANCZOS),box=(0,0))
+        scaled_image.paste(image.resize((int(scale * image.width), int(scale * image.height)), resample=RESAMPLE),box=(0,0))
         return scaled_image

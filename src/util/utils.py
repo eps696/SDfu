@@ -92,7 +92,8 @@ def load_img(path, size=None, tensor=True):
     image = Image.open(path).convert('RGB')
     w, h = image.size if size is None else size
     w, h = map(lambda x: x - x % 8, (w, h))  # resize to integer multiple of 8
-    image = image.resize((w,h), Image.Resampling.LANCZOS) # (w,h)
+    resampl = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
+    image = image.resize((w,h), resampl) # (w,h)
     if not tensor: return image
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0,3,1,2)

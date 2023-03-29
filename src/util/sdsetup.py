@@ -24,6 +24,10 @@ logging.getLogger('diffusers').setLevel(logging.ERROR)
 try:
     import xformers; isxf = True
 except: isxf = False
+try: # colab
+    get_ipython().__class__.__name__
+    iscolab = True
+except: iscolab = False
 
 device = torch.device('cuda')
 
@@ -241,11 +245,11 @@ class SDfu:
                         noise_pred = nz_uncond + cfg_scale * (nz_cond - nz_uncond)
                     return noise_pred
                 lat = self.sampling_fn(model_fn, lat, self.sigmas[offset:])
-                if verbose: print() # compensate pbar printout
+                if verbose and not iscolab: print() # compensate pbar printout
 
             else:
                 log = 'gen sched %d, ts %d' % (len(self.scheduler.timesteps), len(self.timesteps))
-                if verbose: pbar = progbar(len(self.timesteps) - offset)
+                if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
                 for t in self.timesteps[offset:]:
                     lat_in = lat # scheduler.scale_model_input(lat, t) # scales only k-samplers! ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
 
@@ -262,7 +266,7 @@ class SDfu:
                         noise_pred = nz_uncond + cfg_scale * (nz_cond - nz_uncond) # guidance here
 
                     lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
-                    if verbose: pbar.upd(log)
+                    if verbose and not iscolab: pbar.upd(log)
 
             if isok(mask, masked_lat) and not self.inpaintmod: # inpaint with standard models
                 lat = masked_lat * mask + lat * (1.-mask)

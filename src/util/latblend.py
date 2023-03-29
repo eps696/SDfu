@@ -18,6 +18,10 @@ torch.backends.cudnn.benchmark = False
 torch.set_grad_enabled(False)
 
 from .utils import slerp, lerp, blend, cvshow, progbar
+try: # colab
+    get_ipython().__class__.__name__
+    iscolab = True
+except: iscolab = False
 
 class LatentBlending():
     def __init__(self, sd, steps, cfg_scale=7, scale_mid_damper=0.5):
@@ -136,7 +140,7 @@ class LatentBlending():
 
         # Run iteratively, starting with the longest trajectory.
         # Always inserting new branches where they are needed most according to image similarity
-        pbar = progbar(sum(list_num_stems))
+        if not iscolab: pbar = progbar(sum(list_num_stems))
         for s_idx in range(len(idxs_injection)):
             num_stems = list_num_stems[s_idx]
             idx_injection = idxs_injection[s_idx]
@@ -146,7 +150,7 @@ class LatentBlending():
                 lats = self.compute_latents_mix(fract_mixing, b_parent1, b_parent2, idx_injection)
                 self.insert_into_tree(fract_mixing, idx_injection, lats)
                 # print(f"fract_mixing: {fract_mixing} idx_injection {idx_injection}")
-                pbar.upd()
+                if not iscolab: pbar.upd()
 
     def compute_latents1(self):
         # diffusion trajectory 1
