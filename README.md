@@ -26,8 +26,6 @@ Other features:
 * Weighted multi-prompts (with brackets or numerical weights)
 * to be continued..  
 
-More stuff and Colab version will follow. 
-
 ## Setup
 
 Install CUDA 11.6. Setup the Conda environment:
