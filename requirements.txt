@@ -1,11 +1,13 @@
 transformers
 diffusers
+-e git+https://github.com/openai/CLIP.git@main#egg=clip
+torchmetrics==0.10.3
+pytorch-lightning==1.8.3.post0
 
 easydict
 numpy
 tqdm
 einops
-transformers
 opencv-python
 timm
 scikit-image
