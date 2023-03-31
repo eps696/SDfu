@@ -73,6 +73,8 @@ def main():
             z_ = sd.rnd_z(H, W)
             images = sd.generate(z_, c_)
 
+        postfix = a.load_custom or a.load_lora or a.load_token
+        if postfix is not None: file_out += '-%s' % basename(postfix)
         outcount = images.shape[0]
         if outcount > 1:
             for j in range(outcount):

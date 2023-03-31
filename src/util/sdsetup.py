@@ -16,7 +16,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 import k_diffusion as K
 
 from .text import multiprompt
-from .finetune import load_embeds, load_delta, load_loras
+from .finetune import load_embeds, load_loras, load_delta, custom_diff
 from .utils import load_img, makemask, isok, isset, progbar, file_list
 
 import logging
@@ -103,6 +103,7 @@ class SDfu:
         if  isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
             mod_tokens = load_loras(torch.load(a.load_lora), unet, text_encoder, tokenizer)
         elif  isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
+            unet = custom_diff(unet, train=False)
             mod_tokens = load_delta(torch.load(a.load_custom), unet, text_encoder, tokenizer)
         elif isset(a, 'load_token') and os.path.exists(a.load_token): # text inversion
             emb_files = [a.load_token] if os.path.isfile(a.load_token) else file_list(a.load_token, 'pt')

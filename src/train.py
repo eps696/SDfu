@@ -44,6 +44,9 @@ parser.add_argument('-o', '--out_dir',  default="train", help="Output directory"
 parser.add_argument('-b','--batch_size', default=1, type=int, help="batch size for training dataloader")
 parser.add_argument('-ts', '--train_steps', default=2000, type=int, help="Number of training steps")
 parser.add_argument('--save_step',      default=500, type=int, help="how often to save models and samples")
+parser.add_argument('-ai', '--aug_img', action='store_true', help="Augment input images (random resize)")
+parser.add_argument('-at', '--aug_txt', default=True, help="Augment input captions. Required for style, for aug_img, is generally better, therefore always on")
+parser.add_argument('-xf', '--xformers', action='store_true', help="Try to use xformers")
 parser.add_argument('-val', '--validate', action='store_true', help="Save test samples during training")
 parser.add_argument('-lo', '--low_mem', action='store_true', help="Use gradient checkpointing: less memory, slower training")
 parser.add_argument('--freeze_model',   default='crossattn_kv', help="set 'crossattn' to enable fine-tuning of all key, value, query matrices")
@@ -57,6 +60,8 @@ device = torch.device('cuda')
 if a.seed is not None:
     from pytorch_lightning import seed_everything
     seed_everything(a.seed)
+if a.style or a.aug_img:
+    a.aug_txt = True
 
 def main():
     a.out_dir = os.path.join(a.out_dir, '%s-%s-m%s' % (a.token, a.type, a.model))
@@ -111,7 +116,7 @@ def main():
     inputs = [{"caption": '%s %s' % (mod_tokens[i], init_tokens[i]), "term": init_tokens[i], "data": data_dirs[i]} for i in range(len(mod_tokens))]
     if with_prior:
         inputs = [{**inputs[i], "term_data": term_data_dirs[i]} for i in range(len(mod_tokens))]
-    train_dataset = FinetuneDataset(inputs, tokenizer, resolution, style=a.style, augment=True, add_caption = a.type=='lora', flip=True)
+    train_dataset = FinetuneDataset(inputs, tokenizer, resolution, style=a.style, aug_img=a.aug_img, aug_txt=a.aug_txt, add_caption = a.type=='lora', flip=True)
     def collate_fn(examples):
         input_ids = [example["instance_token_id"] for example in examples]
         images    = [example["instance_image"]    for example in examples]
@@ -122,6 +127,36 @@ def main():
         input_ids = tokenizer.pad({"input_ids": input_ids}, padding="max_length", max_length=tokenizer.model_max_length, return_tensors="pt").input_ids
         return {"input_ids": input_ids.to(device), "images": images.to(device)}
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=a.batch_size, shuffle=True, collate_fn=collate_fn)
+
+    # cast modules :: inference = fp16 freezed, training = fp32 with grad
+    weight_dtype = torch.float16 # torch.float16 torch.bfloat16
+    vae.to(dtype=weight_dtype).requires_grad_(False)
+    text_encoder.text_model.encoder.requires_grad_(False)
+    text_encoder.text_model.final_layer_norm.requires_grad_(False)
+    text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
+    if a.type=='lora':
+        unet.requires_grad_(False)
+        lora_layers.requires_grad_(True)
+        unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
+    elif a.type=='text':
+        unet.requires_grad_(False)
+        unet_dtype = weight_dtype
+    elif a.type == 'custom':
+        unet = custom_diff(unet, a.freeze_model)
+        unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
+        unet0 = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16) # required to compress delta
+    unet.to(dtype=unet_dtype)
+    text_encoder.to(dtype=torch.float32) # !!! must be trained as float32; otherwise inf/nan
+
+    if a.xformers is True:
+        try:
+            import xformers
+            unet.enable_xformers_memory_efficient_attention()
+        except: pass
+
+    if a.low_mem:
+        unet.enable_gradient_checkpointing()
+        text_encoder.gradient_checkpointing_enable()
 
     # optimization
     if a.type == 'text': # text inversion: only new embedding(s)
@@ -155,36 +190,10 @@ def main():
 
     optimizer = torch.optim.AdamW(params_to_optimize, lr=a.lr, betas=(0.9, 0.999), weight_decay=0.01, eps=1e-08)
 
-    if a.low_mem:
-        unet.enable_gradient_checkpointing()
-        text_encoder.gradient_checkpointing_enable()
-
     if a.scale_lr:
         a.lr *= a.batch_size
         if with_prior:
             a.lr *= 2.
-
-    # cast modules :: inference = fp16 freezed, training = fp32 with grad
-    weight_dtype = torch.float16 # torch.float16 torch.bfloat16
-    vae.to(dtype=weight_dtype).requires_grad_(False)
-    text_encoder.text_model.encoder.requires_grad_(False)
-    text_encoder.text_model.final_layer_norm.requires_grad_(False)
-    text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
-    if a.type=='lora':
-        unet.requires_grad_(False)
-        lora_layers.requires_grad_(True)
-        unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
-    elif a.type=='text':
-        unet.requires_grad_(False)
-        unet_dtype = weight_dtype
-    elif a.type == 'custom':
-        unet = custom_diff(unet, a.freeze_model)
-        unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
-        unet0 = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16) # required to compress delta
-    unet.to(dtype=unet_dtype)
-    text_encoder.to(dtype=torch.float32) # !!! must be trained as float32; otherwise inf/nan
-
-    # unet.enable_xformers_memory_efficient_attention() # does not work here yet
 
     # training loop
     epoch_steps = len(train_dataloader)

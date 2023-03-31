@@ -14,6 +14,9 @@ from torchvision import transforms
 
 from diffusers.models.attention import CrossAttention
 from diffusers.models.cross_attention import LoRACrossAttnProcessor
+try:
+    import xformers
+except: pass
 
 PIL_INTERPOLATION = PIL.Image.Resampling.BICUBIC if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0") else PIL.Image.BICUBIC
 
@@ -33,8 +36,9 @@ templates_style = [
     "painting in the style of {}",
     "rendering in the style of {}",
     "rendition in the style of {}",
-    "cool painting in the style of {}",
-    "nice painting in the style of {}",
+    "object in the style of {}",
+    "cool picture in the style of {}",
+    "nice picture in the style of {}",
 ]
 
 class Capturer():
@@ -63,11 +67,12 @@ class Capturer():
         return self.processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
 
 class FinetuneDataset(Dataset):
-    def __init__(self, inputs, tokenizer, size=512, style=False, augment=True, add_caption=False, flip=True):
+    def __init__(self, inputs, tokenizer, size=512, style=False, aug_img=True, aug_txt=True, add_caption=False, flip=True):
         self.size = size
         self.tokenizer = tokenizer
         self.style = style
-        self.augment = augment
+        self.aug_img = aug_img
+        self.aug_txt = aug_txt
         self.add_caption = add_caption
         self.with_prior = 'term_data' in inputs[0]
 
@@ -106,7 +111,8 @@ class FinetuneDataset(Dataset):
         if not image.mode == "RGB":
             image = image.convert("RGB")
         image = self.flip(image)
-        if self.augment:
+        epithet = ''
+        if self.aug_img:
             if np.random.randint(0, 3) < 2:
                 random_scale = np.random.randint(self.size // 3, self.size + 1)
             else:
@@ -126,15 +132,16 @@ class FinetuneDataset(Dataset):
                 epithet = np.random.choice(['zoomed in ', 'close up ', 'large '])
             else:
                 image = self.pil_scale_np(image, self.size)
-                epithet = ''
-            if aug_text and caption is not None:
-                if self.style:
-                    caption = np.random.choice(['', 'a ', 'the ']) + epithet + random.choice(templates_style).format(caption)
-                else:
-                    caption = np.random.choice(['', 'a ', 'the ']) + random.choice(templates).format(np.random.choice(['', 'a ', 'the ']) + epithet + caption)
         else:
             image = self.pil_scale_np(image, self.size)
         image_t = torch.from_numpy(image).permute(2,0,1)
+
+        if aug_text and self.aug_txt and caption is not None:
+            if self.style:
+                caption = np.random.choice(['', 'a ', 'the ']) + epithet + random.choice(templates_style).format(caption)
+            else:
+                caption = np.random.choice(['', 'a ', 'the ']) + random.choice(templates).format(np.random.choice(['', 'a ', 'the ']) + epithet + caption)
+
         return image_t, caption
     
     def __getitem__(self, index):
@@ -152,83 +159,108 @@ class FinetuneDataset(Dataset):
             batch["class_token_id"] = self.tokenizer(term, padding="do_not_pad", truncation=True, max_length=self.tokenizer.model_max_length).input_ids
         return batch
 
+# # # # # # # # # Custom Diffusion # # # # # # # # # 
 
-def custom_diff(unet, freeze_model):
-    for name, params in unet.named_parameters():
-        if freeze_model == 'crossattn':
-            selected = 'attn2' in name
-        else: # crossattn_kv
-            selected = 'attn2.to_k' in name or 'attn2.to_v' in name
-        params.requires_grad = True if selected else False
+def custom_diff(unet, freeze_model="crossattn_kv", train=True):
+    if train:
+        for name, params in unet.named_parameters():
+            if freeze_model == 'crossattn':
+                selected = 'attn2' in name
+            elif freeze_model == "crossattn_kv":
+                selected = 'attn2.to_k' in name or 'attn2.to_v' in name
+            params.requires_grad = True if selected else False
 
-    def new_forward(self, hidden_states, **kwargs):
-        batch_size, sequence_length, _ = hidden_states.shape
-        crossattn = False
-        context = None
-        if 'context' in kwargs:
-            context = kwargs['context']
-        elif 'encoder_hidden_states' in kwargs:
-            context = kwargs['encoder_hidden_states']
-        if context is not None:
-            crossattn = True
-
-        q = self.to_q(hidden_states)
-        context = context if context is not None else hidden_states
-        k = self.to_k(context)
-        v = self.to_v(context)
-
-        if crossattn:
-            modifier = torch.ones_like(k)
-            modifier[:, :1, :] = modifier[:, :1, :]*0.
-            k = modifier*k + (1-modifier)*k.detach()
-            v = modifier*v + (1-modifier)*v.detach()
-
-        dim = q.shape[-1]
-
-        """ original custom diffusion, for OLD diffusers?
-        q = self.reshape_heads_to_batch_dim(q)
-        k = self.reshape_heads_to_batch_dim(k)
-        v = self.reshape_heads_to_batch_dim(v)
-        if self._use_memory_efficient_attention_xformers: 
-            hidden_states = self._memory_efficient_attention_xformers(q, k, v)
-            hidden_states = hidden_states.to(q.dtype) # Some versions of xformers return fp32, cast it back to the input dtype
-        else:
-            if self._slice_size is None or q.shape[0] // self._slice_size == 1:
-                hidden_states = self._attention(q, k, v)
-            else:
-                hidden_states = self._sliced_attention(q, k, v, sequence_length, dim)
-        """
-
-        # fix for NEW diffusers = old self._attention from 0.11.1
-        q = self.head_to_batch_dim(q)
-        k = self.head_to_batch_dim(k)
-        v = self.head_to_batch_dim(v)
-        if self.upcast_attention:
-            q, k = q.float(), k.float()
-        attn_scores = torch.baddbmm(torch.empty(q.shape[0], q.shape[1], k.shape[1], dtype=q.dtype, device=q.device), q, k.transpose(-1,-2), 
-                                    beta=0, alpha=self.scale)
-        if self.upcast_softmax:
-            attn_scores = attn_scores.float()
-        attention_probs = attn_scores.softmax(dim=-1)
-        attention_probs = attention_probs.to(v.dtype)
-        hidden_states = torch.bmm(attention_probs, v) # compute attention output
-        hidden_states = self.batch_to_head_dim(hidden_states)
-
-        hidden_states = self.to_out[0](hidden_states) # linear proj
-        hidden_states = self.to_out[1](hidden_states) # dropout
-        return hidden_states
-
-    def change_forward(unet):
+    def change_attn(unet):
         for layer in unet.children():
             if type(layer) == CrossAttention:
-                bound_method = new_forward.__get__(layer, layer.__class__)
-                setattr(layer, 'forward', bound_method)
+                bound_method = set_use_memory_efficient_attention_xformers.__get__(layer, layer.__class__)
+                setattr(layer, 'set_use_memory_efficient_attention_xformers', bound_method)
             else:
-                change_forward(layer)
+                change_attn(layer)
 
-    change_forward(unet)
+    change_attn(unet)
+    unet.set_attn_processor(CustomDiffusionAttnProcessor())
     return unet
 
+def set_use_memory_efficient_attention_xformers(self, use_memory_efficient_attention_xformers, attention_op=None):
+    if use_memory_efficient_attention_xformers:
+        if self.added_kv_proj_dim is not None:
+            raise NotImplementedError("Memory efficient attention with `xformers` is currently not supported when `self.added_kv_proj_dim` is defined")
+        processor = CustomDiffusionXFormersAttnProcessor(attention_op=attention_op)
+    else:
+        processor = CustomDiffusionAttnProcessor()
+    self.set_processor(processor)
+
+class CustomDiffusionAttnProcessor:
+    def __call__(self, attn: CrossAttention, hidden_states, encoder_hidden_states=None, attention_mask=None):
+        batch_size, sequence_length, _ = hidden_states.shape
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        query = attn.to_q(hidden_states)
+
+        crossattn = False
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        else:
+            crossattn = True
+            if attn.cross_attention_norm:
+                encoder_hidden_states = attn.norm_cross(encoder_hidden_states)
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        if crossattn:
+            modifier = torch.ones_like(key)
+            modifier[:, :1, :] = modifier[:, :1, :]*0.
+            key = modifier*key + (1-modifier)*key.detach()
+            value = modifier*value + (1-modifier)*value.detach()
+
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+
+        attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        hidden_states = torch.bmm(attention_probs, value)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states) # linear proj
+        hidden_states = attn.to_out[1](hidden_states) # dropout
+        return hidden_states
+
+class CustomDiffusionXFormersAttnProcessor:
+    def __init__(self, attention_op=None):
+        self.attention_op = attention_op
+
+    def __call__(self, attn: CrossAttention, hidden_states, encoder_hidden_states=None, attention_mask=None):
+        batch_size, sequence_length, _ = hidden_states.shape
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        query = attn.to_q(hidden_states)
+
+        crossattn = False
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        else:
+            crossattn = True
+            if attn.cross_attention_norm:
+                encoder_hidden_states = attn.norm_cross(encoder_hidden_states)
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        if crossattn:
+            modifier = torch.ones_like(key)
+            modifier[:, :1, :] = modifier[:, :1, :]*0.
+            key = modifier*key + (1-modifier)*key.detach()
+            value = modifier*value + (1-modifier)*value.detach()
+
+        query = attn.head_to_batch_dim(query).contiguous()
+        key = attn.head_to_batch_dim(key).contiguous()
+        value = attn.head_to_batch_dim(value).contiguous()
+
+        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask, op=self.attention_op)
+        hidden_states = hidden_states.to(query.dtype)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states) # linear proj
+        hidden_states = attn.to_out[1](hidden_states) # dropout
+        return hidden_states
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 def save_embeds(save_path, text_encoder, tokens, tokens_id, accelerator=None):
     if accelerator is not None:
