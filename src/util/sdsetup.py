@@ -5,7 +5,6 @@ from contextlib import nullcontext
 
 import torch
 import torch.nn.functional as F
-from pytorch_lightning import seed_everything
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
@@ -18,6 +17,7 @@ import k_diffusion as K
 from .text import multiprompt
 from .finetune import load_embeds, load_loras, load_delta, custom_diff
 from .utils import load_img, makemask, isok, isset, progbar, file_list
+from .args import models
 
 import logging
 logging.getLogger('diffusers').setLevel(logging.ERROR)
@@ -61,21 +61,36 @@ class SDfu:
         self.a = a
         self.use_half = isset(a, 'precision') and a.precision not in ['full', 'float32', 'fp32']
         self.precision_scope = torch.autocast if self.use_half else nullcontext
-        if not isset(a, 'seed'): a.seed = int((time.time()%1)*69696)
-        if not isset(a, 'text_norm'): a.text_norm = None
-        seed_everything(a.seed)
+        self.seed = a.seed if isset(a, 'seed') else int((time.time()%1)*69696)
+        self.g_ = torch.Generator("cuda").manual_seed(self.seed)
 
+        if a.model not in models: # downloaded or url
+            self.load_model_external(a.model)
+        else:
+            self.load_model_custom(a, vae, text_encoder, tokenizer, unet, scheduler)
+        self.final_setup(a)
+
+    def load_model_external(self, model_path):
+        self.pipe = DiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
+        self.text_encoder = self.pipe.text_encoder
+        self.tokenizer    = self.pipe.tokenizer
+        self.unet         = self.pipe.unet
+        self.vae          = self.pipe.vae
+        self.scheduler    = self.pipe.scheduler
+        self.sched_kwargs = {}
+
+    def load_model_custom(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # paths
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.clipseg_path = os.path.join(a.maindir, 'clipseg/rd64-uni.pth')
         vtype = a.model[-1] == 'v'
-        subdir = 'v2v' if vtype else 'v2' if a.model[0]=='2' else 'v1'
+        self.subdir = 'v2v' if vtype else 'v2' if a.model[0]=='2' else 'v1'
 
         if vtype and not isxf: # scheduler.prediction_type == "v_prediction":
             print(" V-models require xformers! install it or use another model"); exit()
 
         # text input
-        txtenc_path = os.path.join(a.maindir, subdir, 'text')
+        txtenc_path = os.path.join(a.maindir, self.subdir, 'text')
         if text_encoder is None:
             text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True).to(device)
         if tokenizer is None:
@@ -84,7 +99,7 @@ class SDfu:
         self.tokenizer = tokenizer
 
         if unet is None:
-            unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
+            unet_path = os.path.join(a.maindir, self.subdir, 'unet' + a.model)
             unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16, local_files_only=True).to(device)
         if not isxf and isinstance(unet.config.attention_head_dim, int): unet.set_attention_slice(unet.config.attention_head_dim // 2) # 8
         self.unet = unet
@@ -93,7 +108,7 @@ class SDfu:
             vae_path = 'vae'
             if a.model[0]=='1' and a.vae != 'orig':
                 vae_path = 'vae-ft-mse' if a.vae=='mse' else 'vae-ft-ema'
-            vae_path = os.path.join(a.maindir, subdir, vae_path)
+            vae_path = os.path.join(a.maindir, self.subdir, vae_path)
             vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16).to(device)
         if not isxf: vae.enable_slicing()
         self.vae = vae
@@ -113,9 +128,8 @@ class SDfu:
         if mod_tokens is not None: print(' loaded tokens:', mod_tokens[0] if len(mod_tokens)==1 else mod_tokens)
 
         if scheduler is None:
-            sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
+            sched_path = os.path.join(a.maindir, self.subdir, 'scheduler_config.json')
             self.sched_kwargs = {}
-            self.use_kdiff = False
             if a.sampler == 'pndm':
                 scheduler = PNDMScheduler.from_pretrained(sched_path)
             elif a.sampler == 'dpm':
@@ -124,7 +138,6 @@ class SDfu:
                 scheduler = DDIMScheduler.from_pretrained(sched_path)
                 self.sched_kwargs = {"eta": a.ddim_eta}
             else:
-                self.use_kdiff = True
                 scheduler = LMSDiscreteScheduler.from_pretrained(sched_path)
                 model = ModelWrapper(unet, scheduler.alphas_cumprod)
                 self.kdiff_model = K.external.CompVisVDenoiser(model) if vtype else K.external.CompVisDenoiser(model)
@@ -137,26 +150,25 @@ class SDfu:
                 else: print(' Unknown sampler', a.sampler); exit()
         self.scheduler = scheduler
 
+        self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler).to(device)
+
+    def final_setup(self, a):
+        if isxf: self.pipe.enable_xformers_memory_efficient_attention()
         # sampling
+        self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
         self.set_steps(a.steps, a.strength)
 
-        self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler).to(device)
-        if isxf: self.pipe.enable_xformers_memory_efficient_attention()
-
-        uc_prompt = a.unprompt if isset(a, 'unprompt') else ''
-        self.uc = multiprompt(self, uc_prompt, norm=a.text_norm)[0][0]
-        
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
-        self.res = unet.config.sample_size * self.vae_scale # original model resolution
-        self.inpaintmod = unet.in_channels==9
+        self.res = self.unet.config.sample_size * self.vae_scale # original model resolution
+        self.inpaintmod = self.unet.in_channels==9
         assert not (self.inpaintmod and not isset(a, 'mask')), '!! Inpainting model requires mask !!' 
-        assert not (unet.in_channels != 4 and self.use_kdiff), "!! K-samplers don't work with depth/inpaint models !!"
-        self.depthmod = unet.in_channels==5
+        assert not (self.unet.in_channels != 4 and self.use_kdiff), "!! K-samplers don't work with depth/inpaint models !!"
+        self.depthmod = self.unet.in_channels==5
         if self.depthmod:
-            from transformers import DPTForDepthEstimation, DPTFeatureExtractor
-            depth_path = os.path.join(a.maindir, subdir, 'depth')
+            from transformers import DPTForDepthEstimation, DPTImageProcessor
+            depth_path = os.path.join(a.maindir, self.subdir, 'depth')
             self.depth_estimator = DPTForDepthEstimation.from_pretrained(depth_path, torch_dtype=torch.float16).to(device)
-            self.feat_extractor = DPTFeatureExtractor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
+            self.feat_extractor  = DPTImageProcessor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
 
 
     def set_steps(self, steps, strength=1., warmup=1, device=device):
@@ -181,15 +193,15 @@ class SDfu:
 
     def img_lat(self, image):
         if self.use_half: image = image.half()
-        lats = self.vae.encode(image).latent_dist.sample() * self.vae.config.scaling_factor # self.vae.encode(image).latent_dist.mean
+        lats = self.vae.encode(image).latent_dist.sample() * self.vae.config.scaling_factor
         return torch.cat([lats])
 
-    def ddim_inv(self, lat, cond=None): # ddim inversion, slower, ~exact
-        if cond is None: cond = self.uc
-        for t in reversed(self.scheduler.timesteps):
-            with torch.no_grad():
-                noise_pred = self.unet(lat, t, cond).sample
-            lat = self.next_step_ddim(noise_pred, t, lat)
+    def ddim_inv(self, lat, cond): # ddim inversion, slower, ~exact
+        with self.precision_scope('cuda'):
+            for t in reversed(self.scheduler.timesteps):
+                with torch.no_grad():
+                    noise_pred = self.unet(lat, t, cond).sample
+                lat = self.next_step_ddim(noise_pred, t, lat)
         return lat
 
     def lat_z(self, lat):
@@ -197,14 +209,14 @@ class SDfu:
             if self.use_kdiff: # k-samplers, fast, not exact
                 return lat + torch.randn_like(lat) * self.sigmas[0]
             else: # ddim stochastic encode, fast, not exact
-                return self.scheduler.add_noise(lat, torch.randn(lat.shape, device=device, dtype=lat.dtype), self.lat_timestep)
+                return self.scheduler.add_noise(lat, torch.randn(lat.shape, generator=self.g_, device=device, dtype=lat.dtype), self.lat_timestep)
 
     def img_z(self, image):
         return self.lat_z(self.img_lat(image))
 
     def rnd_z(self, H, W):
         shape_ = (self.a.batch, 4, H // self.vae_scale, W // self.vae_scale)
-        lat = torch.randn(shape_, device=device)
+        lat = torch.randn(shape_, generator=self.g_, device=device)
         return self.scheduler.init_noise_sigma * lat
 
     def prep_mask(self, mask_str, img_path, init_image=None):
@@ -219,7 +231,7 @@ class SDfu:
     def prep_depth(self, init_image):
         [H, W] = init_image.shape[-2:]
         with torch.no_grad(), torch.autocast("cuda"):
-            preps = self.feat_extractor(images=[init_image.squeeze(0)], return_tensors="pt").pixel_values
+            preps = self.feat_extractor(images=[(init_image.squeeze(0)+1)/2], return_tensors="pt").pixel_values
             preps = F.interpolate(preps, size=[384,384], mode="bicubic", align_corners=False).to(device)
             dd = self.depth_estimator(preps).predicted_depth.unsqueeze(0) # [1,1,384,384]
         dd = F.interpolate(dd, size=[H//self.vae_scale, W//self.vae_scale], mode="bicubic", align_corners=False)
@@ -227,23 +239,27 @@ class SDfu:
         dd = 2. * (dd - depth_min) / (depth_max - depth_min) - 1.
         return {'depth': dd} # [1,1,64,64]
 
-    def generate(self, lat, c_, uc=None, cfg_scale=None, mask=None, masked_lat=None, depth=None, offset=0, verbose=True):
-        if uc is None: uc = self.uc
+    def generate(self, lat, cs, uc, cfg_scale=None, mask=None, masked_lat=None, depth=None, cws=None, offset=0, verbose=True):
         if cfg_scale is None: cfg_scale = self.a.cfg_scale
         with torch.no_grad(), self.precision_scope('cuda'):
+            if cws is None or not len(cws) == len(cs): cws = [1 / len(cs)] * len(cs)
             if self.a.batch > 1:
-                uc, c_ = uc.repeat(self.a.batch, 1, 1), c_.repeat(self.a.batch, 1, 1)
-            conds = uc if cfg_scale==0 else c_ if cfg_scale==1 else torch.cat([uc, c_])
+                uc = uc.repeat(self.a.batch, 1, 1)
+                cs = cs.repeat_interleave(self.a.batch, 0)
+            conds = uc if cfg_scale==0 else cs[:1] if cfg_scale==1 else torch.cat([uc, cs])
             if isset(self.a, 'load_lora') and isxf: conds = conds.float() # otherwise q/k/v mistype error
+            bs = len(conds) // self.a.batch
 
             if self.use_kdiff:
                 def model_fn(x, t):
                     if cfg_scale in [0, 1]:
                         noise_pred = self.kdiff_model(x, t, cond=conds)
                     else:
-                        lat_in, t = torch.cat([x]*2), torch.cat([t]*2)
-                        nz_uncond, nz_cond = self.kdiff_model(lat_in, t, cond=conds).chunk(2)
-                        noise_pred = nz_uncond + cfg_scale * (nz_cond - nz_uncond)
+                        lat_in, t = torch.cat([x] * bs), torch.cat([t] * bs)
+                        noises = self.kdiff_model(lat_in, t, cond=conds).chunk(bs)
+                        noise_pred = noises[0] # uncond
+                        for i in range(len(noises)-1):
+                            noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here
                     return noise_pred
                 lat = self.sampling_fn(model_fn, lat, self.sigmas[offset:])
                 if verbose and not iscolab: print() # compensate pbar printout
@@ -260,11 +276,13 @@ class SDfu:
                         lat_in = torch.cat([lat_in, depth], dim=1)
 
                     if cfg_scale in [0, 1]:
-                        noise_pred = self.unet(lat_in, t, conds).sample # pred noise residual at step t
+                        noise_pred = self.unet(lat_in, t, conds).sample
                     else:
-                        lat_in = torch.cat([lat_in] * 2) # expand latents for classifier free guidance
-                        nz_uncond, nz_cond = self.unet(lat_in, t, conds).sample.chunk(2) # pred noise residual at step t
-                        noise_pred = nz_uncond + cfg_scale * (nz_cond - nz_uncond) # guidance here
+                        lat_in = torch.cat([lat_in] * bs) # expand latents for classifier free guidance
+                        noises = self.unet(lat_in, t, conds).sample.chunk(bs) # pred noise residual at step t
+                        noise_pred = noises[0] # uncond
+                        for i in range(len(noises)-1):
+                            noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here
 
                     lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
                     if verbose and not iscolab: pbar.upd(log)

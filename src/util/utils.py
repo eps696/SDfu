@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image, ImageOps
 import cv2
 import skimage
+import pickle
 import collections
 
 import torch
@@ -60,6 +61,7 @@ def lerps(v0, v1, x): # for lists
 
 # https://github.com/itjustis/sdthings/blob/main/scripts/alivify.py - from @xsteenbrugge?
 def slerp(v0, v1, x, DOT_THRESHOLD=0.9995):
+    if x==0: return v0
     dot = torch.sum(v0 * v1 / (torch.norm(v0) * torch.norm(v1)))
     if torch.abs(dot) > DOT_THRESHOLD:
         v2 = lerp(v0, v1, x)
@@ -200,7 +202,7 @@ def read_latents(latents):
         for lat in lat_list: 
             key_latent = load_latents(lat)
             key_latents.append(key_latent)
-        if isinstance(key_latents[0], list):
+        if isinstance(key_latents[0], list) or isinstance(key_latents[0], tuple):
             key_latents = list(map(list, zip(*key_latents)))
             for n in range(len(key_latents)):
                 key_latents[n] = torch.cat(key_latents[n])
@@ -217,10 +219,10 @@ def load_latents(lat_file):
     if os.path.exists(idx_file): 
         with open(idx_file) as f:
             lat_idx = f.readline()
-            lat_idx = [int(l.strip()) for l in lat_idx.split(',') if '\n' not in l and len(l.strip())>0]
+            lat_idx = [int(l.strip()) for l in lat_idx.split(',') if len(l.strip())>0]
         key_lats = list(key_lats) if isinstance(key_lats, list) or isinstance(key_lats, tuple) else [key_lats]
         for n, key_lat in enumerate(key_lats):
-            key_lats[n] = torch.cat([key_lat[i].unsqueeze(0) for i in lat_idx])
+            key_lats[n] = torch.cat([key_lat[i % len(key_lat)].unsqueeze(0) for i in lat_idx])
     return key_lats
 
 def save_cfg(args, dir='./', file='config.txt'):

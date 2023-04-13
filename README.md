@@ -73,6 +73,7 @@ python src/latwalk.py -t yourfile.txt -im _in/pix/alex-iby-G_Pk4D9rMLs.jpg --mas
 python src/latwalk.py -im _in/pix --cfg_scale 0 --strength 1
 ```
 Interpolations can be made smoother by adding `--latblend` option ([latent blending] technique). If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
+Models can be selected with `--model` option by shortcuts (15, 15i, 2i, 2d, 21, 21v) or local directory or path on the [Hugging Face] website.  
 Check other options and their shortcuts by running these scripts with `--help` option.  
 
 There are also Windows bat-files, slightly simplifying and automating the commands. 
@@ -91,7 +92,7 @@ python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.0001 --ty
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 --term_data data/cat --type custom
 ```
-Add `--style` if you're training for a style rather than an object. Add `--low_mem` if you get OOM.   
+Add `--style` if you're training for a style rather than an object. Add `--xformers` or `--low_mem` if you get OOM.   
 Results of the trainings will be saved under `train` directory. 
 
 Custom diffusion trains faster and can achieve impressive reproduction quality (including faces) with simple similar prompts, but it can lose the point on generation if the prompt is too complex or aside from the original category. To train it, you'll need both target reference images (`data/mycat1`) and more random images of similar subjects (`data/cat`). Apparently, you can generate the latter with SD itself.  
@@ -111,9 +112,10 @@ python src/gen.py -t "cosmic <mycat1> beast" --load_custom mycat1-custom.pt
 python src/gen.py -t "cosmic <mycat1> beast" --load_token mycat1-text.pt
 ```
 
-Besides special tokens (e.g. `<depthmap>`), text prompts may include weights, controlled as numbers (like `good prompt :1 | also good prompt :1 | bad prompt :-0.5`) or with brackets (like `(good) [bad] ((even better)) [[even worse]]`) by the option `--parens`.  
+Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
+Formatting prompts like `good prompt :1 | also good prompt :1 | bad prompt :-0.5` with `--cguide` option would interpolate predicted noise instead of conditionings, providing smoother semantic blending. Note that it would slow generation down proportionally to the sections count.  
 
-You can also run `python src/latwalk.py ...` with such arguments to make animations.
+You can also run `python src/latwalk.py ...` with finetuned weights to make animations.
 
 
 ## Credits

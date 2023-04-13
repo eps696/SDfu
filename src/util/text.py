@@ -92,50 +92,6 @@ def parse_prompt(text):
 
     return res
 
-def txt_clean(txt):
-    if isinstance(txt, list):
-        txt = [t.strip() for t in txt if len(t.strip()) > 0]
-        txt = ' '.join(txt).strip()
-    return ''.join(e for e in txt.replace(' ', '_') if (e.isalnum() or e in ['_','-']))
-
-def read_txt(txt):
-    if os.path.isfile(txt):
-        with open(txt, 'r', encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    else:
-        lines = [txt]
-    return lines
-
-def parse_line(txt):
-    subs = []
-    for subtxt in txt.split('|'):
-        if ':' in subtxt:
-            [subtxt, wt] = subtxt.split(':')
-            wt = float(wt)
-        else: wt = 1e-4 if len(subtxt.strip())==0 else 1.
-        subs.append([subtxt.strip(), wt])
-    return subs # [list of [text, weight]]
-
-def read_multitext(in_txt, prefix=None, postfix=None):
-    if in_txt is None or len(in_txt)==0: return [[('', 1.)]]
-    prompts = [parse_line(tt) for tt in read_txt(in_txt) if tt.strip()[0] != '#']
-
-    maxlen = 0
-    for prompt in prompts:
-        maxlen = max(maxlen, len(prompt))
-    for i in range(len(prompts)):
-        if len(prompts[i]) < maxlen:
-            prompts[i] += [('', 1e-4)] * (maxlen - len(prompts[i]))
-
-    if prefix is not None and len(prefix) > 0:
-        prefixs  = read_txt(prefix)
-        prompts = [parse_line(prefixs[i % len(prefixs)]) + prompts[i]   for i in range(len(prompts))]
-    if postfix is not None and len(postfix) > 0:
-        postfixs = read_txt(postfix)
-        prompts = [prompts[i] + parse_line(postfixs[i % len(postfixs)]) for i in range(len(prompts))]
-
-    return prompts # [list of [list of [text, weight]]]
-
 def encode_tokens(pipe, prompt):
     maxlen = pipe.tokenizer.model_max_length
     bos = pipe.tokenizer.bos_token_id # 49406
@@ -165,29 +121,46 @@ def encode_tokens(pipe, prompt):
 
     return embedding
 
-# not a 100% correct method! works ~somehow, but coefficients should be used with care
-def encode_strings(pipe, prompt, norm=False):
-    embedding = 0.
-    sum_ws = sum([p[1] for p in prompt])
-    if sum_ws < 0.6: print('!! prompt weights sum is too low, beware of artifacts !!')
-    for p in prompt: # p = [text, weight]
-        substr_token = pipe.tokenizer(p[0], padding="max_length", max_length=pipe.tokenizer.model_max_length, truncation=True, return_tensors="pt")
-        substr_emb = pipe.text_encoder(substr_token.input_ids.to(device))[0] * p[1] / sum_ws
-        embedding += substr_emb
-    if norm: # may help to get things back to normal
-        cur_mean = embedding.float().mean()
-        cur_std  = embedding.float().std()
-        embedding = (embedding - cur_mean) / cur_std + cur_mean
-    return embedding
-
-def multiprompt(pipe, in_txt, pretxt='', postxt='', parens=False, norm=False):
-    if parens:
-        prompts = [parse_prompt(''.join([pretxt, line, postxt])) for line in read_txt(in_txt)]
-        embeddings = [encode_tokens(pipe, p) for p in prompts] # list of [1,77,768]
+def read_txt(txt):
+    if os.path.isfile(txt):
+        with open(txt, 'r', encoding="utf-8") as f:
+            lines = f.read().splitlines()
     else:
-        prompts = read_multitext(in_txt, pretxt, postxt)
-        embeddings = [encode_strings(pipe, p, norm) for p in prompts] # list of [1,77,768]
+        lines = [txt]
+    return lines
 
-    texts = [txt_clean([p[0] for p in prompt]) for prompt in prompts]
-    return embeddings, texts
+def parse_line(txt):
+    subs = []
+    wts = []
+    for subtxt in txt.split('|'):
+        if ':' in subtxt:
+            [subtxt, wt] = subtxt.split(':')
+            wt = float(wt)
+        else: 
+            wt = 1.
+        subs += [subtxt.strip()]
+        wts  += [wt]
+    return subs, wts
 
+def txt_clean(txt):
+    if isinstance(txt, list):
+        txt = [t.strip() for t in txt if len(t.strip()) > 0]
+        txt = ' '.join(txt).strip()
+    return ''.join(e for e in txt.replace(' ', '_') if (e.isalnum() or e in ['_','-']))
+
+def multiprompt(pipe, in_txt, pretxt='', postxt='', repeat=1):
+    prompts = [parse_line(line) for line in read_txt(in_txt) if len(line.strip()) > 0 and line.strip()[0] != '#']
+    if len(prompts)==0: prompts = [([''], [1.])] # uc
+    embeds  = []
+    weights = []
+    texts   = []
+    for prompt in prompts:
+        embatch = torch.cat([encode_tokens(pipe, parse_prompt(' '.join([pretxt, string, postxt]))) for string in prompt[0]]) # [b,77,768]
+        embeds += [embatch]
+        wts = torch.Tensor(prompt[1])
+        weights += [wts / wts.sum()]
+        texts += ['-'.join([txt_clean(s)[:44] for s in prompt[0]])[:88]]
+    embeds  = torch.stack(embeds).repeat(repeat,1,1,1) # [num,b,77,768]
+    weights = torch.stack(weights).repeat(repeat,1).to(embeds.device, dtype=embeds.dtype) # [num,b]
+    return embeds, weights, texts
+    

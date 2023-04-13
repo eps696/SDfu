@@ -83,9 +83,10 @@ class LatentBlending():
         guidance_scale_effective = self.scale_base - max_guidance_reduction * mid_factor
         self.cfg_scale = guidance_scale_effective
 
-    def set_conds(self, cond1, cond2):
+    def set_conds(self, cond1, cond2, uc):
         self.text_emb1 = cond1
         self.text_emb2 = cond2
+        self.uc = uc
 
     def init_lats(self, lat1, lat2):
         self.branch1_cross_power = 0. # to keep initial latents intact
@@ -389,10 +390,10 @@ class LatentBlending():
         with self.precision_scope("cuda"):
             lat = self.sd.scheduler.scale_model_input(lat.cuda(), t)
             if self.cfg_scale > 0:
-                nz_uncond, nz_cond = self.sd.unet(torch.cat([lat] * 2), t, torch.cat([self.sd.uc, c_])).sample.chunk(2)
+                nz_uncond, nz_cond = self.sd.unet(torch.cat([lat] * 2), t, torch.cat([self.uc, c_])).sample.chunk(2)
                 noise_pred = nz_uncond + self.cfg_scale * (nz_cond - nz_uncond)
             else:
-                noise_pred = self.sd.unet(lat, t, self.sd.uc).sample
+                noise_pred = self.sd.unet(lat, t, self.uc).sample
             lat = self.sd.scheduler.step(noise_pred.cpu(), t, lat.cpu(), **self.sd.sched_kwargs).prev_sample.cuda().half()
         return lat
 
