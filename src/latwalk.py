@@ -126,7 +126,7 @@ def main():
     pbar = progbar(pcount if a.latblend else pcount * a.fstep)
     for i in range(pcount):
         if a.latblend:
-            cs = csb[0] # !!! only single text input/file yet
+            cs = csb.mean(1, keepdims=True) # !!! only single text input/file yet
             lb.init_lats(zs[i % len(zs)], zs[(i+1) % len(zs)])
             lb.set_conds(cs[i % len(cs)], cs[(i+1) % len(cs)], uc)
             lb.run_transition(W, H, max_branches = a.fstep, reuse = i>0)
