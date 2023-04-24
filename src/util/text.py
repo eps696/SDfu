@@ -133,8 +133,8 @@ def parse_line(txt):
     subs = []
     wts = []
     for subtxt in txt.split('|'):
-        if ':' in subtxt:
-            [subtxt, wt] = subtxt.split(':')
+        if '~' in subtxt:
+            [subtxt, wt] = subtxt.split('~')
             wt = float(wt)
         else: 
             wt = 1.

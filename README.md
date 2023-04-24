@@ -113,7 +113,7 @@ python src/gen.py -t "cosmic <mycat1> beast" --load_token mycat1-text.pt
 ```
 
 Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
-Formatting prompts like `good prompt :1 | also good prompt :1 | bad prompt :-0.5` with `--cguide` option would interpolate predicted noise instead of conditionings, providing smoother semantic blending. Note that it would slow generation down proportionally to the sections count.  
+Formatting prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option would interpolate predicted noise instead of conditionings, providing smoother semantic blending. Note that it would slow generation down proportionally to the sections count.  
 
 You can also run `python src/latwalk.py ...` with finetuned weights to make animations.
 

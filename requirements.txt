@@ -1,5 +1,5 @@
 transformers
-diffusers
+diffusers==0.14
 git+https://github.com/openai/CLIP
 torchmetrics==0.10.3
 # pytorch-lightning==1.8.3.post0
