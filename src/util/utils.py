@@ -75,6 +75,18 @@ def slerp(v0, v1, x, DOT_THRESHOLD=0.9995):
         v2 = s0 * v0 + s1 * v1
     return v2
 
+def slerp2(v0, v1, x):
+    if x==0: return v0
+    z1_norm = torch.norm(v0)
+    z2_norm = torch.norm(v1)
+    z2_normal = v1 * (z1_norm / z2_norm)
+    vectors = []
+    interplain = v0 + (v1 - v0) * x
+    interp = v0 + (z2_normal - v0) * x
+    interp_norm = torch.norm(interp)
+    interpol_normal = interp * (z1_norm / interp_norm)
+    return interpol_normal
+
 def triblur(x, k=3, pow=1.0):
     # padding = (k-1) // 2 # minimum padding to conv
     padding = k # let's pad more to avoid border effects
@@ -104,8 +116,8 @@ def load_img(path, size=None, tensor=True):
 
 def save_img(image, num, out_dir, prefix='', filepath=None):
     image = torch.clamp((image + 1.) / 2., min=0., max=1.).permute(1,2,0).cpu().numpy() * 255
-    if filepath is None: filepath = prefix + '%05d.jpg' % num
-    Image.fromarray(image.astype(np.uint8)).save(os.path.join(out_dir, filepath))
+    if filepath is None: filepath = '%05d.jpg' % num
+    Image.fromarray(image.astype(np.uint8)).save(os.path.join(out_dir, prefix + filepath))
 
 def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, model_path='models/clipseg/rd64-uni.pth'):
     if os.path.isfile(mask_str): 
@@ -259,21 +271,22 @@ import ipywidgets as ipy
 import IPython
 
 class ProgressIPy(object):
-    def __init__(self, task_num=10):
-        self.pbar = ipy.IntProgress(min=0, max=task_num, bar_style='') # (value=0, min=0, max=max, step=1, description=description, bar_style='')
+    def __init__(self, task_num=10, start_num=0, start=True):
+        self.task_num = task_num - start_num
+        self.pbar = ipy.IntProgress(min=0, max=self.task_num, bar_style='') # (value=0, min=0, max=max, step=1, description=description, bar_style='')
         self.labl = ipy.Label()
         IPython.display.display(ipy.HBox([self.pbar, self.labl]))
-        self.task_num = task_num
         self.completed = 0
-        self.start()
+        self.start_num = start_num
+        if start:
+            self.start()
 
-    def start(self, task_num=None):
+    def start(self, task_num=None, start_num=None):
         if task_num is not None:
             self.task_num = task_num
-        if self.task_num > 0:
-            self.labl.value = '0/{}'.format(self.task_num)
-        else:
-            self.labl.value = 'completed: 0, elapsed: 0s'
+        if start_num is not None:
+            self.start_num = start_num
+        self.labl.value = '{}/{}'.format(self.start_num, self.task_num + self.start_num)
         self.start_time = time.time()
 
     def upd(self, *p, **kw):
@@ -285,22 +298,29 @@ class ProgressIPy(object):
             fin = ' end %s' % finaltime[11:16]
             percentage = self.completed / float(self.task_num)
             eta = int(elapsed * (1 - percentage) / percentage + 0.5)
-            self.labl.value = '{}/{}, rate {:.3g}s, time {}s, left {}s, {}'.format(self.completed, self.task_num, 1./fps, shortime(elapsed), shortime(eta), fin)
+            self.labl.value = '{}/{}, rate {:.3g}s, time {}s, left {}s, {}'.format(self.completed + self.start_num, self.task_num + self.start_num, 1./fps, shortime(elapsed), shortime(eta), fin)
         else:
-            self.labl.value = 'completed {}, time {}s, {:.1f} steps/s'.format(self.completed, int(elapsed + 0.5), fps)
+            self.labl.value = 'completed {}, time {}s, {:.1f} steps/s'.format(self.completed + self.start_num, int(elapsed + 0.5), fps)
         self.pbar.value += 1
         if self.completed == self.task_num: self.pbar.bar_style = 'success'
         return self.completed
+
+    def reset(self, start_num=0, task_num=None):
+        self.start_time = time.time()
+        self.start_num = start_num
+        if task_num is not None:
+            self.task_num = task_num
 
 class ProgressBar(object):
     '''A progress bar which can print the progress
     modified from https://github.com/hellock/cvbase/blob/master/cvbase/progress.py
     '''
-    def __init__(self, task_num=0, bar_width=50, start=True):
-        self.task_num = task_num
+    def __init__(self, count=0, start_num=0, bar_width=50, start=True):
+        self.task_num = count - start_num
         max_bar_width = self._get_max_bar_width()
         self.bar_width = (bar_width if bar_width <= max_bar_width else max_bar_width)
         self.completed = 0
+        self.start_num = start_num
         if start:
             self.start()
 
@@ -312,11 +332,13 @@ class ProgressBar(object):
             max_bar_width = 10
         return max_bar_width
 
-    def start(self, task_num=None):
+    def start(self, task_num=None, start_num=None):
         if task_num is not None:
             self.task_num = task_num
+        if start_num is not None:
+            self.start_num = start_num
         if self.task_num > 0:
-            sys.stdout.write('[{}] 0/{}, elapsed: 0s, ETA:\n{}\n'.format(' ' * self.bar_width, self.task_num, 'Start...'))
+            sys.stdout.write('[{}] {}/{} \n{}\n'.format(' ' * self.bar_width, self.start_num, self.task_num + self.start_num, 'Start...'))
         else:
             sys.stdout.write('completed: 0, elapsed: 0s')
         sys.stdout.flush()
@@ -338,18 +360,19 @@ class ProgressBar(object):
             sys.stdout.write('\033[J')  # clean the output (remove extra chars since last display)
             try:
                 sys.stdout.write('[{}] {}/{}, rate {:.3g}s, time {}s, left {}s \n{}\n'.format(
-                    bar_chars, self.completed, self.task_num, 1./fps, shortime(elapsed), shortime(eta), fin_msg))
+                    bar_chars, self.completed + self.start_num, self.task_num + self.start_num, 1./fps, shortime(elapsed), shortime(eta), fin_msg))
             except:
                 sys.stdout.write('[{}] {}/{}, rate {:.3g}s, time {}s, left {}s \n{}\n'.format(
-                    bar_chars, self.completed, self.task_num, 1./fps, shortime(elapsed), shortime(eta), '<< unprintable >>'))
+                    bar_chars, self.completed + self.start_num, self.task_num + self.start_num, 1./fps, shortime(elapsed), shortime(eta), '<< unprintable >>'))
         else:
             sys.stdout.write('completed {}, time {}s, {:.1f} steps/s'.format(self.completed, int(elapsed + 0.5), fps))
         sys.stdout.flush()
 
-    def reset(self, count=None, newline=False):
+    def reset(self, start_num=0, count=None, newline=False):
         self.start_time = time.time()
+        self.start_num = start_num
         if count is not None:
-            self.task_num = count
+            self.task_num = count - start_num
         if newline is True:
             sys.stdout.write('\n\n')
 

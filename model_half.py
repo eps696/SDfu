@@ -30,7 +30,7 @@ def float2half(data):
         elif isinstance(data[k], list):
             data[k] = [float2half(x) for x in data[k]]
         else:
-            if data[k] is not None and torch.is_tensor(data[k]) and data[k].type() == 'torch.FloatTensor':
+            if data[k] is not None and torch.is_tensor(data[k]) and data[k].type() in ['torch.FloatTensor', 'torch.cuda.FloatTensor']:
                 data[k] = data[k].half()
     return data
 

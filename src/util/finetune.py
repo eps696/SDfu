@@ -12,11 +12,20 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from diffusers.models.attention import CrossAttention
-from diffusers.models.cross_attention import LoRACrossAttnProcessor
-try:
-    import xformers
-except: pass
+try: # diffusers 0.14
+    from diffusers.models.attention import CrossAttention as Attention
+    from diffusers.models.cross_attention import LoRACrossAttnProcessor as LoRAAttnProcessor
+    try:
+        import xformers
+    except: pass
+except: # diffusers 0.15+
+    from diffusers.models.attention_processor import Attention
+    try:
+        import xformers
+        from diffusers.models.attention_processor import LoRAXFormersAttnProcessor as LoRAAttnProcessor
+    except:
+        from diffusers.models.attention_processor import LoRAAttnProcessor
+from diffusers.loaders import AttnProcsLayers
 
 PIL_INTERPOLATION = PIL.Image.Resampling.BICUBIC if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0") else PIL.Image.BICUBIC
 
@@ -80,11 +89,11 @@ class FinetuneDataset(Dataset):
         self.instance_pairs = []
         self.class_pairs = []
         for batch in inputs: # may be miltiple 
-            instance_pairs = [(x, batch["caption"]) for x in Path(batch["data"]).iterdir() if x.is_file()]
+            instance_pairs = [(x, batch["caption"]) for x in Path(batch["data"]).iterdir() if x.is_file() and str(x).lower().split('.')[-1] in ['jpg','png','tif']]
             self.instance_pairs.extend(instance_pairs)
             random.shuffle(self.instance_pairs)
             if self.with_prior:
-                class_pairs = [(x, batch["term"]) for x in Path(batch["term_data"]).iterdir() if x.is_file()]
+                class_pairs = [(x, batch["term"]) for x in Path(batch["term_data"]).iterdir() if x.is_file() and str(x).lower().split('.')[-1] in ['jpg','png','tif']]
                 self.class_pairs.extend(class_pairs)
                 random.shuffle(self.class_pairs)
         
@@ -172,7 +181,7 @@ def custom_diff(unet, freeze_model="crossattn_kv", train=True):
 
     def change_attn(unet):
         for layer in unet.children():
-            if type(layer) == CrossAttention:
+            if type(layer) == Attention:
                 bound_method = set_use_memory_efficient_attention_xformers.__get__(layer, layer.__class__)
                 setattr(layer, 'set_use_memory_efficient_attention_xformers', bound_method)
             else:
@@ -192,7 +201,7 @@ def set_use_memory_efficient_attention_xformers(self, use_memory_efficient_atten
     self.set_processor(processor)
 
 class CustomDiffusionAttnProcessor:
-    def __call__(self, attn: CrossAttention, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def __call__(self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None):
         batch_size, sequence_length, _ = hidden_states.shape
         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
         query = attn.to_q(hidden_states)
@@ -202,8 +211,11 @@ class CustomDiffusionAttnProcessor:
             encoder_hidden_states = hidden_states
         else:
             crossattn = True
-            if attn.cross_attention_norm:
+            # if attn.cross_attention_norm:
+                # encoder_hidden_states = attn.norm_cross(encoder_hidden_states)
+            try: # in 0.15 cross_attention_norm not exposed
                 encoder_hidden_states = attn.norm_cross(encoder_hidden_states)
+            except: pass
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -228,7 +240,7 @@ class CustomDiffusionXFormersAttnProcessor:
     def __init__(self, attention_op=None):
         self.attention_op = attention_op
 
-    def __call__(self, attn: CrossAttention, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def __call__(self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None):
         batch_size, sequence_length, _ = hidden_states.shape
         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
         query = attn.to_q(hidden_states)
@@ -238,8 +250,11 @@ class CustomDiffusionXFormersAttnProcessor:
             encoder_hidden_states = hidden_states
         else:
             crossattn = True
-            if attn.cross_attention_norm:
+            # if attn.cross_attention_norm:
+                # encoder_hidden_states = attn.norm_cross(encoder_hidden_states)
+            try: # in 0.15 cross_attention_norm not exposed
                 encoder_hidden_states = attn.norm_cross(encoder_hidden_states)
+            except: pass
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -259,6 +274,29 @@ class CustomDiffusionXFormersAttnProcessor:
         hidden_states = attn.to_out[0](hidden_states) # linear proj
         hidden_states = attn.to_out[1](hidden_states) # dropout
         return hidden_states
+
+# # # # # # # # # LoRA # # # # # # # # # 
+
+def prep_lora(unet):
+    # attention processors => 32 layers
+    # 3x down blocks * 2x attn layers * 2x transformer layers = 12
+    # 1x mid blocks  * 2x attn layers * 1x transformer layers = 2
+    # 3x up blocks   * 2x attn layers * 3x transformer layers = 18
+    lora_attn_procs = {}
+    for name in unet.attn_processors.keys():
+        cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
+        if name.startswith("mid_block"):
+            hidden_size = unet.config.block_out_channels[-1]
+        elif name.startswith("up_blocks"):
+            block_id = int(name[len("up_blocks.")])
+            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+        elif name.startswith("down_blocks"):
+            block_id = int(name[len("down_blocks.")])
+            hidden_size = unet.config.block_out_channels[block_id]
+        lora_attn_procs[name] = LoRAAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim).to(unet.device)
+    unet.set_attn_processor(lora_attn_procs)
+    lora_layers = AttnProcsLayers(unet.attn_processors)
+    return unet, lora_layers
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
@@ -320,15 +358,15 @@ def load_delta(st, unet, text_encoder, tokenizer, token_str=None, compress=True,
         if freeze_model == 'crossattn':
             if 'attn2' in name:
                 if compress and ('to_k' in name or 'to_v' in name):
-                    params.data += st['unet'][name]['u']@st['unet'][name]['v']
+                    params.data += (st['unet'][name]['u']@st['unet'][name]['v']).to(unet.device)
                 else:
-                    params.data.copy_(st['unet'][f'{name}'])
+                    params.data.copy_(st['unet'][f'{name}'].to(unet.device))
         else:
             if 'attn2.to_k' in name or 'attn2.to_v' in name:
                 if compress:
-                    params.data += st['unet'][name]['u']@st['unet'][name]['v']
+                    params.data += (st['unet'][name]['u']@st['unet'][name]['v']).to(unet.device)
                 else:
-                    params.data.copy_(st['unet'][f'{name}'])
+                    params.data.copy_(st['unet'][f'{name}'].to(unet.device))
     return new_tokens if 'modifier_token' in st else None
 
 def compress_delta(delta_dict, unet, compression_ratio = 0.6):
@@ -396,7 +434,7 @@ def load_loras(st, unet, text_encoder=None, tokenizer=None, token_str=None):
         rank = value_dict["to_k_lora.down.weight"].shape[0]
         cross_attention_dim = value_dict["to_k_lora.down.weight"].shape[1]
         hidden_size = value_dict["to_k_lora.up.weight"].shape[0]
-        attn_processors[key] = LoRACrossAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, rank=rank)
+        attn_processors[key] = LoRAAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, rank=rank)
         attn_processors[key].load_state_dict(value_dict)
     attn_processors = {k: v.to(device=unet.device, dtype=unet.dtype) for k, v in attn_processors.items()}
     unet.set_attn_processor(attn_processors)

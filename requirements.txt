@@ -1,11 +1,11 @@
 transformers
-diffusers==0.14
+diffusers
 git+https://github.com/openai/CLIP
-torchmetrics==0.10.3
+torchmetrics
 # pytorch-lightning==1.8.3.post0
 
 easydict
-numpy
+numpy==1.23
 tqdm
 einops
 opencv-python

@@ -17,7 +17,7 @@ import torch
 torch.backends.cudnn.benchmark = False
 torch.set_grad_enabled(False)
 
-from .utils import slerp, lerp, blend, cvshow, progbar
+from .utils import slerp, slerp2, lerp, blend, cvshow, progbar
 try: # colab
     get_ipython().__class__.__name__
     iscolab = True
@@ -40,13 +40,12 @@ class LatentBlending():
                 imply more values in the middle. However the inflection point can occur outside the middle,
                 thus high values can give rough transitions. Values around 2 should be fine.
         """
-        assert scale_mid_damper > 0 and scale_mid_damper <= 1.0, f"scale_mid_damper neees to be in interval (0,1], you provided {scale_mid_damper}"
-
         self.sd = sd
         self.device = torch.device('cuda')
         self.steps = steps
         self.sd.set_steps(self.steps)
 
+        assert scale_mid_damper > 0 and scale_mid_damper <= 1.0, f"scale_mid_damper neees to be in interval (0,1], you provided {scale_mid_damper}"
         self.scale_mid_damper = scale_mid_damper
         self.seed1 = int((time.time()%1)*69696)
         self.seed2 = int((time.time()%1)*69696)
@@ -74,7 +73,8 @@ class LatentBlending():
         self.cfg_scale = cfg_scale
 
         self.dt_per_diff = 0
-        self.lpips = lpips.LPIPS(net='vgg', verbose=False).cuda()
+        self.lpips = lpips.LPIPS(net='alex', verbose=False).cuda()
+        self.slerp = slerp2 if self.sd.a.sampler == 'euler' else slerp
 
     def set_scale_mid_damp(self, fract_mixing):
         # Tunes the guidance scale down as a linear function of fract_mixing, towards 0.5 the minimum will be reached.
@@ -83,9 +83,10 @@ class LatentBlending():
         guidance_scale_effective = self.scale_base - max_guidance_reduction * mid_factor
         self.cfg_scale = guidance_scale_effective
 
-    def set_conds(self, cond1, cond2, uc):
+    def set_conds(self, cond1, cond2, cws, uc):
         self.text_emb1 = cond1
         self.text_emb2 = cond2
+        self.cws = cws
         self.uc = uc
 
     def init_lats(self, lat1, lat2):
@@ -103,8 +104,7 @@ class LatentBlending():
                 Number of diffusion steps. Higher values will take more compute time.
             depth_strength:
                 Determines how deep the first injection will happen.
-                Deeper injections will cause (unwanted) formation of new structures,
-                more shallow values will go into alpha-blendy land.
+                Deeper injections (low values) may cause (unwanted) formation of new structures, shallow (high) values will go into alpha-blendy land.
             t_compute_max:
                 Either provide t_compute_max or max_branches.
                 The maximum time allowed for computation. Higher values give better results but take longer.
@@ -190,7 +190,12 @@ class LatentBlending():
             idx_injection: int
                 the index in terms of diffusion steps, where the next insertion will start.
         """
-        cond = lerp(self.text_emb1, self.text_emb2, fract_mixing) if self.cfg_scale > 0 else None
+        if self.cfg_scale == 0: # no guidance
+            cond = None
+        elif self.sd.a.lguide: # multi guidance
+            cond = [self.text_emb1, self.text_emb2, fract_mixing]
+        else: # cond lerp
+            cond = lerp(self.text_emb1, self.text_emb2, fract_mixing) if self.cfg_scale > 0 else None
         fract_mixing_parental = (fract_mixing - self.tree_fracts[b_parent1]) / (self.tree_fracts[b_parent2] - self.tree_fracts[b_parent1])
 
         lats_parent_mix = []
@@ -200,7 +205,7 @@ class LatentBlending():
             if latents_p1 is None or latents_p2 is None:
                 latents_parental = None
             else:
-                latents_parental = slerp(latents_p1, latents_p2, fract_mixing_parental)
+                latents_parental = self.slerp(latents_p1, latents_p2, fract_mixing_parental)
             lats_parent_mix.append(latents_parental)
 
         idx_mixing_stop = int(round(self.steps * self.parent_cross_range))
@@ -369,32 +374,71 @@ class LatentBlending():
             # Collect latents
             lat = lat_start.clone()
             lats_out = []
-            for i, t in enumerate(self.sd.timesteps):
-                # Set the right starting latents
+            
+            for i in range(self.steps):
                 if i < idx_start:
                     lats_out.append(None)
                     continue
                 elif i == idx_start:
-                    lat = lat_start.clone()
-                # Mix latents
+                    lat = lat_start.clone() # set the right starting latents
                 if i > 0 and list_mixing_coeffs[i] > 0:
-                    lat_mixtarget = lats_mixing[i - 1].clone()
-                    lat = slerp(lat, lat_mixtarget, list_mixing_coeffs[i])
+                    lat_mixtarget = lats_mixing[i-1].clone()
+                    lat = self.slerp(lat, lat_mixtarget, list_mixing_coeffs[i]) # mix latents
 
-                lat = self.sample_step(lat, cond, t)
+                if self.sd.a.sampler == 'euler':
+                    lat = self.euler_step(lat, cond, self.sd.sigmas, i)
+                else: # ddim
+                    lat = self.ddim_step(lat, cond, self.sd.timesteps[i])
 
                 lats_out.append(lat.clone())
+
             return lats_out
 
-    def sample_step(self, lat, c_, t, verbose=True):
+    def euler_step(self, lat, cond, sigmas, i, verbose=True):
         with self.precision_scope("cuda"):
-            lat = self.sd.scheduler.scale_model_input(lat.cuda(), t)
+            sigma = sigmas[i]
+            t = sigma * lat.new_ones([lat.shape[0]])
             if self.cfg_scale > 0:
-                nz_uncond, nz_cond = self.sd.unet(torch.cat([lat] * 2), t, torch.cat([self.uc, c_])).sample.chunk(2)
-                noise_pred = nz_uncond + self.cfg_scale * (nz_cond - nz_uncond)
+                if isinstance(cond, list) and len(cond) == 3: # multi guidance lerp
+                    c1, c2, mix = cond
+                    bs = len(c1)*2 + 1
+                    noises = self.sd.kdiff_model(torch.cat([lat] * bs), t, cond=torch.cat([self.uc, c1, c2])).chunk(bs)
+                    denoised = noises[0] # uncond
+                    for n in range(len(c1)):
+                        denoised = denoised + (noises[n+1] * (1.-mix) + noises[n+1+len(c1)] * mix - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)]
+                else: # multi guidance
+                    bs = len(cond) + 1
+                    noises = self.sd.kdiff_model(torch.cat([lat] * bs), t, cond=torch.cat([self.uc, cond])).chunk(bs)
+                    denoised = noises[0] # uncond
+                    for n in range(len(cond)):
+                        denoised = denoised + (noises[n+1] - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)] # guidance
+            else:
+                denoised = self.sd.kdiff_model(lat, t, cond=self.uc)
+            d = (lat - denoised) / sigma
+            dt = sigmas[i + 1] - sigma
+            lat = lat + d * dt # Euler method
+        return lat
+
+    def ddim_step(self, lat, cond, t, verbose=True):
+        with self.precision_scope("cuda"):
+            lat = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers!?
+            if self.cfg_scale > 0:
+                if isinstance(cond, list) and len(cond) == 3: # multi guidance
+                    c1, c2, mix = cond
+                    bs = len(c1)*2 + 1
+                    noises = self.sd.unet(torch.cat([lat] * bs), t, torch.cat([self.uc, c1, c2])).sample.chunk(bs)
+                    noise_pred = noises[0] # uncond
+                    for n in range(len(c1)):
+                        noise_pred = noise_pred + (noises[n+1] * (1.-mix) + noises[n+1+len(c1)] * mix - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)]
+                else: # usual guidance
+                    bs = len(cond) + 1
+                    noises = self.sd.unet(torch.cat([lat] * bs), t, torch.cat([self.uc, cond])).sample.chunk(bs) # pred noise residual at step t
+                    noise_pred = noises[0] # uncond
+                    for n in range(len(cond)):
+                        noise_pred = noise_pred + (noises[n+1] - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)] # guidance
             else:
                 noise_pred = self.sd.unet(lat, t, self.uc).sample
-            lat = self.sd.scheduler.step(noise_pred.cpu(), t, lat.cpu(), **self.sd.sched_kwargs).prev_sample.cuda().half()
+            lat = self.sd.scheduler.step(noise_pred.cpu(), t, lat.cpu(), **self.sd.sched_kwargs).prev_sample.cuda().half() # why can't make it on cuda??
         return lat
 
     def get_noise(self, seed):
@@ -402,13 +446,14 @@ class LatentBlending():
         return torch.randn(self.shape, generator=generator, device=self.device) * self.sd.scheduler.init_noise_sigma
 
     def lat2img(self, lat):
-        return self.sd.vae.decode(lat / self.sd.vae.config.scaling_factor).sample
+        return self.sd.vae.decode(lat.to(dtype=self.sd.vae.dtype) / self.sd.vae.config.scaling_factor).sample
     
     def get_lpips_similarity(self, imgA, imgB):
         return float(self.lpips(imgA, imgB)[0][0][0][0]) # high value = low similarity
 
-    def save_imgs(self, save_dir, start_num=0):
+    def save_imgs(self, save_dir, start_num=0, skiplast=False):
         os.makedirs(save_dir, exist_ok=True)
+        if skiplast: self.tree_imgs = self.tree_imgs[:-1]
         for i, img in enumerate(self.tree_imgs):
             img = torch.clamp((img + 1.) / 2., min=0., max=1.) * 255
             img = img[0].permute([1,2,0]).cpu().numpy().astype(np.uint8)

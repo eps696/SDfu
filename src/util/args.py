@@ -1,10 +1,10 @@
 import argparse
 
-samplers = ['klms', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
-models = ['15', '15i', '2i', '2d', '21', '21v'] # !! only 15 is uncensored !!
+samplers = ['klms', 'uni', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
+models = ['15', '15drm', '15i', '2i', '21', '21v'] # !! only 15 is uncensored !!
 unprompt = ""
 # unprompt = "low quality, poorly drawn, out of focus, blurry, tiled, segmented" # , oversaturated, [[[ugly]]]
-# unprompt += ", letters, text, titles, graffiti, typography"
+# unprompt += ", letters, text, titles, graffiti, typography, watermarks, writings"
 # unprompt += ", human, people, man, girl, face"
 # unprompt += ", ugly, deformed, disfigured, mutated, mutilated, bad anatomy, malformed hands, extra limbs"
 
@@ -34,6 +34,10 @@ def main_args():
     parser.add_argument('-rt', '--load_token', default=None, help="path to the text inversion embeddings file")
     parser.add_argument('-rd', '--load_custom', default=None, help="path to the custom diffusion delta checkpoint")
     parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file")
+    # controlnet
+    parser.add_argument('-cmod', '--control_mod', default=None, help="path to the ControlNet model")
+    parser.add_argument('-cimg', '--control_img', default=None, help="path to the ControlNet driving image (contour, pose, etc)")
+    parser.add_argument('-cts', '--control_scale', default=0.7, type=float, help="ControlNet effect scale")
     # misc
     parser.add_argument('-cg', '--cguide',  action='store_true', help='Use noise guidance for interpolation, instead of cond lerp')
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")

@@ -8,14 +8,11 @@ import torch.nn.functional as F
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
-from diffusers.schedulers import DDIMScheduler, PNDMScheduler, LMSDiscreteScheduler, DPMSolverMultistepScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
-import k_diffusion as K
 
 from .text import multiprompt
-from .finetune import load_embeds, load_loras, load_delta, custom_diff
 from .utils import load_img, makemask, isok, isset, progbar, file_list
 from .args import models
 
@@ -59,15 +56,28 @@ class SDfu:
     def __init__(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # settings
         self.a = a
+        self.device = device
         self.use_half = isset(a, 'precision') and a.precision not in ['full', 'float32', 'fp32']
         self.precision_scope = torch.autocast if self.use_half else nullcontext
-        self.seed = a.seed if isset(a, 'seed') else int((time.time()%1)*69696)
-        self.g_ = torch.Generator("cuda").manual_seed(self.seed)
+        if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
+        self.setseed(a.seed if isset(a, 'seed') else None)
 
         if a.model not in models: # downloaded or url
             self.load_model_external(a.model)
         else:
             self.load_model_custom(a, vae, text_encoder, tokenizer, unet, scheduler)
+        self.pipe.to(device)
+
+        if isset(a, 'control_mod'):
+            if not os.path.exists(a.control_mod): a.control_mod = os.path.join(a.maindir, 'control', a.control_mod)
+            assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
+            from diffusers import ControlNetModel
+            self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
+            self.cnet.to(device)
+            self.pipe.register_modules(controlnet=self.cnet)
+            if a.verbose: print(' loaded ControlNet', a.control_mod)
+        self.use_cnet = hasattr(self, 'cnet')
+
         self.final_setup(a)
 
     def load_model_external(self, model_path):
@@ -81,7 +91,6 @@ class SDfu:
 
     def load_model_custom(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # paths
-        if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.clipseg_path = os.path.join(a.maindir, 'clipseg/rd64-uni.pth')
         vtype = a.model[-1] == 'v'
         self.subdir = 'v2v' if vtype else 'v2' if a.model[0]=='2' else 'v1'
@@ -90,9 +99,9 @@ class SDfu:
             print(" V-models require xformers! install it or use another model"); exit()
 
         # text input
-        txtenc_path = os.path.join(a.maindir, self.subdir, 'text')
+        txtenc_path = os.path.join(a.maindir, self.subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text') # !!!
         if text_encoder is None:
-            text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True).to(device)
+            text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True)
         if tokenizer is None:
             tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True)
         self.text_encoder = text_encoder
@@ -100,7 +109,7 @@ class SDfu:
 
         if unet is None:
             unet_path = os.path.join(a.maindir, self.subdir, 'unet' + a.model)
-            unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16, local_files_only=True).to(device)
+            unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16, local_files_only=True)
         if not isxf and isinstance(unet.config.attention_head_dim, int): unet.set_attention_slice(unet.config.attention_head_dim // 2) # 8
         self.unet = unet
 
@@ -109,18 +118,21 @@ class SDfu:
             if a.model[0]=='1' and a.vae != 'orig':
                 vae_path = 'vae-ft-mse' if a.vae=='mse' else 'vae-ft-ema'
             vae_path = os.path.join(a.maindir, self.subdir, vae_path)
-            vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16).to(device)
+            vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16)
         if not isxf: vae.enable_slicing()
         self.vae = vae
 
         # load finetuned stuff
         mod_tokens = None
         if  isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
+            from .finetune import load_loras
             mod_tokens = load_loras(torch.load(a.load_lora), unet, text_encoder, tokenizer)
         elif  isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
+            from .finetune import load_delta, custom_diff
             unet = custom_diff(unet, train=False)
             mod_tokens = load_delta(torch.load(a.load_custom), unet, text_encoder, tokenizer)
         elif isset(a, 'load_token') and os.path.exists(a.load_token): # text inversion
+            from .finetune import load_embeds
             emb_files = [a.load_token] if os.path.isfile(a.load_token) else file_list(a.load_token, 'pt')
             mod_tokens = []
             for emb_file in emb_files:
@@ -131,13 +143,21 @@ class SDfu:
             sched_path = os.path.join(a.maindir, self.subdir, 'scheduler_config.json')
             self.sched_kwargs = {}
             if a.sampler == 'pndm':
+                from diffusers.schedulers import PNDMScheduler
                 scheduler = PNDMScheduler.from_pretrained(sched_path)
             elif a.sampler == 'dpm':
+                from diffusers.schedulers import DPMSolverMultistepScheduler
                 scheduler = DPMSolverMultistepScheduler(beta_start=0.0001, beta_end=0.02, beta_schedule="scaled_linear", solver_order=2, sample_max_value=1.)
+            elif a.sampler == 'uni':
+                from diffusers.schedulers import UniPCMultistepScheduler
+                scheduler = UniPCMultistepScheduler.from_pretrained(sched_path)
             elif a.sampler == 'ddim':
+                from diffusers.schedulers import DDIMScheduler
                 scheduler = DDIMScheduler.from_pretrained(sched_path)
                 self.sched_kwargs = {"eta": a.ddim_eta}
             else:
+                from diffusers.schedulers import LMSDiscreteScheduler
+                import k_diffusion as K
                 scheduler = LMSDiscreteScheduler.from_pretrained(sched_path)
                 model = ModelWrapper(unet, scheduler.alphas_cumprod)
                 self.kdiff_model = K.external.CompVisVDenoiser(model) if vtype else K.external.CompVisDenoiser(model)
@@ -150,7 +170,7 @@ class SDfu:
                 else: print(' Unknown sampler', a.sampler); exit()
         self.scheduler = scheduler
 
-        self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler).to(device)
+        self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
 
     def final_setup(self, a):
         if isxf: self.pipe.enable_xformers_memory_efficient_attention()
@@ -160,10 +180,14 @@ class SDfu:
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
         self.res = self.unet.config.sample_size * self.vae_scale # original model resolution
-        self.inpaintmod = self.unet.in_channels==9
+        try:
+            uchannels = self.unet.config.in_channels
+        except: 
+            uchannels = self.unet.in_channels
+        self.inpaintmod = uchannels==9
         assert not (self.inpaintmod and not isset(a, 'mask')), '!! Inpainting model requires mask !!' 
-        assert not (self.unet.in_channels != 4 and self.use_kdiff), "!! K-samplers don't work with depth/inpaint models !!"
-        self.depthmod = self.unet.in_channels==5
+        assert not (uchannels != 4 and self.use_kdiff), "!! K-samplers don't work with depth/inpaint models !!"
+        self.depthmod = uchannels==5
         if self.depthmod:
             from transformers import DPTForDepthEstimation, DPTImageProcessor
             depth_path = os.path.join(a.maindir, self.subdir, 'depth')
@@ -171,6 +195,10 @@ class SDfu:
             self.feat_extractor  = DPTImageProcessor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
 
 
+    def setseed(self, seed=None):
+        self.seed = seed or int((time.time()%1)*69696)
+        self.g_ = torch.Generator("cuda").manual_seed(self.seed)
+    
     def set_steps(self, steps, strength=1., warmup=1, device=device):
         self.scheduler.set_timesteps(steps, device=device)
         if not isset(self.a, 'in_img'): strength = 1. # strength is also needed for feedback loops
@@ -239,16 +267,19 @@ class SDfu:
         dd = 2. * (dd - depth_min) / (depth_max - depth_min) - 1.
         return {'depth': dd} # [1,1,64,64]
 
-    def generate(self, lat, cs, uc, cfg_scale=None, mask=None, masked_lat=None, depth=None, cws=None, offset=0, verbose=True):
+    def generate(self, lat, cs, uc, cfg_scale=None, mask=None, masked_lat=None, depth=None, cws=None, cimg=None, offset=0, verbose=True):
         if cfg_scale is None: cfg_scale = self.a.cfg_scale
         with torch.no_grad(), self.precision_scope('cuda'):
             if cws is None or not len(cws) == len(cs): cws = [1 / len(cs)] * len(cs)
             if self.a.batch > 1:
                 uc = uc.repeat(self.a.batch, 1, 1)
                 cs = cs.repeat_interleave(self.a.batch, 0)
-            conds = uc if cfg_scale==0 else cs[:1] if cfg_scale==1 else torch.cat([uc, cs])
+            conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs])
             if isset(self.a, 'load_lora') and isxf: conds = conds.float() # otherwise q/k/v mistype error
             bs = len(conds) // self.a.batch
+            if cimg is not None:
+                cimg = cimg.repeat_interleave(len(conds) // len(cimg), 0)
+            ukwargs = {} # kwargs placeholder for controlnet
 
             if self.use_kdiff:
                 def model_fn(x, t):
@@ -275,11 +306,19 @@ class SDfu:
                     elif isok(depth) and self.depthmod: # depth model
                         lat_in = torch.cat([lat_in, depth], dim=1)
 
-                    if cfg_scale in [0, 1]:
-                        noise_pred = self.unet(lat_in, t, conds).sample
-                    else:
+                    if bs > 1: 
                         lat_in = torch.cat([lat_in] * bs) # expand latents for classifier free guidance
-                        noises = self.unet(lat_in, t, conds).sample.chunk(bs) # pred noise residual at step t
+
+                    if self.use_cnet and cimg is not None: # controlnet fits max 960x640 on 16gb vram
+                        ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cimg, 1, return_dict=False)
+                        ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
+                        ctl_mid *= self.a.control_scale
+                        ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                    
+                    if cfg_scale in [0, 1]:
+                        noise_pred = self.unet(lat_in, t, conds, **ukwargs).sample
+                    else:
+                        noises = self.unet(lat_in, t, conds, **ukwargs).sample.chunk(bs) # pred noise residual at step t
                         noise_pred = noises[0] # uncond
                         for i in range(len(noises)-1):
                             noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here

@@ -6,7 +6,7 @@
 import os
 import sys
 import math
-import random
+import time
 import argparse
 import itertools
 
@@ -17,12 +17,9 @@ import transformers
 transformers.utils.logging.set_verbosity_warning()
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import StableDiffusionPipeline, AutoencoderKL, UNet2DConditionModel, DDIMScheduler
-# lora
-from diffusers.models.cross_attention import LoRACrossAttnProcessor
-from diffusers.loaders import AttnProcsLayers
 
-from util.finetune import FinetuneDataset, custom_diff, save_delta, load_delta, save_lora, load_loras, save_embeds
-from util.utils import save_img, save_cfg, progbar
+from util.finetune import FinetuneDataset, custom_diff, prep_lora, save_delta, load_delta, save_lora, load_loras, save_embeds
+from util.utils import save_img, save_cfg, isset, progbar
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -34,8 +31,8 @@ parser.add_argument('-t', '--token',    default=None, help="special word(s) to i
 parser.add_argument('--term',           default=None, help="generic word(s), associating with that object or style, separated by '+'")
 parser.add_argument('--data',           default=None, help="folder containing target images")
 parser.add_argument('--term_data',      default=None, help="folder containing generic class images (priors for new token)")
-parser.add_argument('-st', '--style',   action='store_true', help="True = style, False = object")
-parser.add_argument('-m',  '--model',   default='15', choices=['15','21','21v'])
+parser.add_argument('-st', '--style',   action='store_true', help="Train for a visual style (otherwise for objects)")
+parser.add_argument('-m',  '--model',   default='15', choices=['15','15drm','21','21v'])
 parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
 parser.add_argument('-rd', '--load_custom', default=None, help="path to the custom diffusion delta checkpoint to resume from")
 parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file to resume from")
@@ -46,7 +43,7 @@ parser.add_argument('-ts', '--train_steps', default=2000, type=int, help="Number
 parser.add_argument('--save_step',      default=500, type=int, help="how often to save models and samples")
 parser.add_argument('-ai', '--aug_img', action='store_true', help="Augment input images (random resize)")
 parser.add_argument('-at', '--aug_txt', default=True, help="Augment input captions. Required for style, for aug_img, is generally better, therefore always on")
-parser.add_argument('-xf', '--xformers', action='store_true', help="Try to use xformers")
+parser.add_argument('-xf', '--xformers', action='store_true', help="Try to use xformers for Custom Diff (LoRA does it itself)")
 parser.add_argument('-val', '--validate', action='store_true', help="Save test samples during training")
 parser.add_argument('-lo', '--low_mem', action='store_true', help="Use gradient checkpointing: less memory, slower training")
 parser.add_argument('--freeze_model',   default='crossattn_kv', help="set 'crossattn' to enable fine-tuning of all key, value, query matrices")
@@ -57,9 +54,10 @@ a = parser.parse_args()
 
 device = torch.device('cuda')
 
-if a.seed is not None:
-    from pytorch_lightning import seed_everything
-    seed_everything(a.seed)
+if not isset(a, 'seed'): 
+    a.seed = int((time.time()%1)*69696)
+g_ = torch.Generator("cuda").manual_seed(a.seed)
+
 if a.style or a.aug_img:
     a.aug_txt = True
 
@@ -70,7 +68,7 @@ def main():
 
     # paths
     subdir = 'v2v' if a.model=='21v' else 'v2' if a.model[0]=='2' else 'v1'
-    txtenc_path = os.path.join(a.maindir, subdir, 'text')
+    txtenc_path = os.path.join(a.maindir, subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text')
     sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
     unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
     vae_path = os.path.join(a.maindir, subdir, 'vae')
@@ -135,6 +133,7 @@ def main():
     text_encoder.text_model.final_layer_norm.requires_grad_(False)
     text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
     if a.type=='lora':
+        unet, lora_layers = prep_lora(unet)
         unet.requires_grad_(False)
         lora_layers.requires_grad_(True)
         unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
@@ -148,7 +147,7 @@ def main():
     unet.to(dtype=unet_dtype)
     text_encoder.to(dtype=torch.float32) # !!! must be trained as float32; otherwise inf/nan
 
-    if a.xformers is True:
+    if a.xformers is True and a.type != 'lora':
         try:
             import xformers
             unet.enable_xformers_memory_efficient_attention()
@@ -158,28 +157,15 @@ def main():
         unet.enable_gradient_checkpointing()
         text_encoder.gradient_checkpointing_enable()
 
+    if a.scale_lr:
+        a.lr *= a.batch_size
+        if with_prior:
+            a.lr *= 2.
+
     # optimization
     if a.type == 'text': # text inversion: only new embedding(s)
         params_to_optimize = text_encoder.get_input_embeddings().parameters()
     elif a.type == 'lora':
-        # attention processors => 32 layers
-        # 3x down blocks * 2x attn layers * 2x transformer layers = 12
-        # 1x mid blocks  * 2x attn layers * 1x transformer layers = 2
-        # 3x up blocks   * 2x attn layers * 3x transformer layers = 18
-        lora_attn_procs = {}
-        for name in unet.attn_processors.keys():
-            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            if name.startswith("mid_block"):
-                hidden_size = unet.config.block_out_channels[-1]
-            elif name.startswith("up_blocks"):
-                block_id = int(name[len("up_blocks.")])
-                hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-            elif name.startswith("down_blocks"):
-                block_id = int(name[len("down_blocks.")])
-                hidden_size = unet.config.block_out_channels[block_id]
-            lora_attn_procs[name] = LoRACrossAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim).to(device)
-        unet.set_attn_processor(lora_attn_procs)
-        lora_layers = AttnProcsLayers(unet.attn_processors)
         params_to_optimize = itertools.chain(text_encoder.get_input_embeddings().parameters(), lora_layers.parameters())
     elif a.freeze_model == 'crossattn': # custom: embeddings & unet attention all
         params_to_optimize = itertools.chain(text_encoder.get_input_embeddings().parameters(), 
@@ -189,11 +175,6 @@ def main():
                                              [x[1] for x in unet.named_parameters() if 'attn2.to_k' in x[0] or 'attn2.to_v' in x[0]])
 
     optimizer = torch.optim.AdamW(params_to_optimize, lr=a.lr, betas=(0.9, 0.999), weight_decay=0.01, eps=1e-08)
-
-    if a.scale_lr:
-        a.lr *= a.batch_size
-        if with_prior:
-            a.lr *= 2.
 
     # training loop
     epoch_steps = len(train_dataloader)
@@ -208,7 +189,7 @@ def main():
         for step, batch in enumerate(train_dataloader):
             latents = vae.encode(batch["images"].to(dtype=weight_dtype)).latent_dist.sample().detach()
             latents = latents * vae.config.scaling_factor # 0.18215
-            noise = torch.randn_like(latents)
+            noise = torch.randn(latents.shape, generator=g_, device=latents.device, dtype=latents.dtype)
             bsize = latents.shape[0]
             timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsize,), device=latents.device)
             timesteps = timesteps.long()
@@ -252,11 +233,10 @@ def main():
                 if a.validate:
                     pipetest = StableDiffusionPipeline(vae, text_encoder, tokenizer, unet, scheduler, None, None, False).to(device)
                     pipetest.set_progress_bar_config(disable=True)
-                    generator = None if a.seed is None else torch.Generator(device=device).manual_seed(a.seed)
                     with torch.autocast("cuda"):
                         for i, (mod_token, init_token) in enumerate(zip(mod_tokens, init_tokens)):
                             prompt = 'photo of %s %s' % (mod_token, init_token)
-                            image = pipetest(prompt, num_inference_steps=50, generator=generator).images[0]
+                            image = pipetest(prompt, num_inference_steps=50, generator=g_).images[0]
                             image.save(os.path.join(a.out_dir, '%s-%04d.jpg' % (mod_token[1:-1], global_step)))
 
             pbar.upd("loss %.4g" % loss.detach().item())

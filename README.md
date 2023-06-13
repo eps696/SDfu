@@ -13,6 +13,7 @@ Current functions:
 * Text to image
 * Image re- and in-painting
 * Various interpolations (between/upon images or text prompts, smoothed by [latent blending])
+* [ControlNet] guidance
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
@@ -21,7 +22,8 @@ Fine-tuning with your images:
 
 Other features:
 * Memory efficient with `xformers` (hi res on 6gb VRAM GPU)
-* Use of special depth/inpainting and v2 models
+* Multi guidance technique for better interpolations
+* Use of special inpainting and v2 models
 * Masking with text via [CLIPseg]
 * Weighted multi-prompts (with brackets or numerical weights)
 * to be continued..  
@@ -72,8 +74,8 @@ python src/latwalk.py -t yourfile.txt -im _in/pix/alex-iby-G_Pk4D9rMLs.jpg --mas
 ```
 python src/latwalk.py -im _in/pix --cfg_scale 0 --strength 1
 ```
-Interpolations can be made smoother by adding `--latblend` option ([latent blending] technique). If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
-Models can be selected with `--model` option by shortcuts (15, 15i, 2i, 2d, 21, 21v) or local directory or path on the [Hugging Face] website.  
+Interpolations can be made smoother (and faster) by adding `--latblend X` option ([latent blending] technique, X in range 0~1). If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
+Models can be selected with `--model` option by shortcuts (15, 15drm, 21, 21v) or local directory or path on the [Hugging Face] website.  
 Check other options and their shortcuts by running these scripts with `--help` option.  
 
 There are also Windows bat-files, slightly simplifying and automating the commands. 
@@ -92,7 +94,7 @@ python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.0001 --ty
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 --term_data data/cat --type custom
 ```
-Add `--style` if you're training for a style rather than an object. Add `--xformers` or `--low_mem` if you get OOM.   
+Add `--style` if you're training for a style rather than an object. Speed up [custom diffusion] with `--xformers` ([LoRA] takes care of it on its own); add `--low_mem` if you get OOM.   
 Results of the trainings will be saved under `train` directory. 
 
 Custom diffusion trains faster and can achieve impressive reproduction quality (including faces) with simple similar prompts, but it can lose the point on generation if the prompt is too complex or aside from the original category. To train it, you'll need both target reference images (`data/mycat1`) and more random images of similar subjects (`data/cat`). Apparently, you can generate the latter with SD itself.  
@@ -112,11 +114,18 @@ python src/gen.py -t "cosmic <mycat1> beast" --load_custom mycat1-custom.pt
 python src/gen.py -t "cosmic <mycat1> beast" --load_token mycat1-text.pt
 ```
 
-Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
-Formatting prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option would interpolate predicted noise instead of conditionings, providing smoother semantic blending. Note that it would slow generation down proportionally to the sections count.  
-
 You can also run `python src/latwalk.py ...` with finetuned weights to make animations.
 
+Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
+More radical blending can be achieved with multiguidance technique (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
+
+## Guide generation with [ControlNet]
+
+* Generate an image from existing one, using its depth map as conditioning:
+```
+python src/preproc.py -i _in/something.jpg --type depth -o _in/depth
+python src/gen.py --control_mod depth --control_img _in/depth/something.jpg -im _out/something.jpg -t "neon glow steampunk" -f 1
+```
 
 ## Credits
 
@@ -131,6 +140,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [InvokeAI]: <https://github.com/invoke-ai/InvokeAI>
 [Deforum]: <https://github.com/deforum-art/deforum-stable-diffusion>
 [CLIPseg]: <https://github.com/timojl/clipseg>
+[ControlNet]: <https://github.com/lllyasviel/ControlNet>
 [textual inversion]: <https://textual-inversion.github.io>
 [custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
 [LoRA]: <https://github.com/cloneofsimo/lora>

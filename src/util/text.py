@@ -149,18 +149,22 @@ def txt_clean(txt):
     return ''.join(e for e in txt.replace(' ', '_') if (e.isalnum() or e in ['_','-']))
 
 def multiprompt(pipe, in_txt, pretxt='', postxt='', repeat=1):
-    prompts = [parse_line(' '.join([pretxt, line, postxt])) for line in read_txt(in_txt) if len(line.strip()) > 0 and line.strip()[0] != '#']
+    prompts = []
+    texts   = []
+    for line in read_txt(in_txt):
+        if len(line.strip()) > 0 and line.strip()[0] != '#':
+            texts += [txt_clean(line)]
+            line = ' '.join([pretxt, line, postxt])
+            prompts += [parse_line(line)]
     if len(prompts)==0: prompts = [([''], [1.])] # uc
     embeds  = []
     weights = []
-    texts   = []
     for prompt in prompts:
         embatch = torch.cat([encode_tokens(pipe, parse_prompt(string)) for string in prompt[0]]) # [b,77,768]
         embeds += [embatch]
         wts = torch.Tensor(prompt[1])
-        weights += [wts / wts.sum()]
-        texts += ['-'.join([txt_clean(s)[:44] for s in prompt[0]])[:88]]
+        weights += [wts] # or [wts / wts.sum()] ?
     embeds  = torch.stack(embeds).repeat(repeat,1,1,1) # [num,b,77,768]
     weights = torch.stack(weights).repeat(repeat,1).to(embeds.device, dtype=embeds.dtype) # [num,b]
     return embeds, weights, texts
-    
+
