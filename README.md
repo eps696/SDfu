@@ -13,7 +13,7 @@ Current functions:
 * Text to image
 * Image re- and in-painting
 * Various interpolations (between/upon images or text prompts, smoothed by [latent blending])
-* [ControlNet] guidance
+* [ControlNet] guidance for pose, depth & canny edges
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
@@ -41,7 +41,7 @@ Install `xformers` library to increase performance. It makes possible to run SD 
 ```
 pip install git+https://github.com/facebookresearch/xformers.git
 ```
-Run command below to download Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5-inpaint](https://huggingface.co/runwayml/stable-diffusion-inpainting), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), [2-depth](https://huggingface.co/stabilityai/stable-diffusion-2-depth), [2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+Run command below to download Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), [2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [ControlNet], [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
