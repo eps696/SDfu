@@ -17,11 +17,15 @@ import torch
 torch.backends.cudnn.benchmark = False
 torch.set_grad_enabled(False)
 
-from .utils import slerp, slerp2, lerp, blend, cvshow, progbar
+from .utils import slerp, slerp2, lerp, blend, cvshow, progbar, isset
 try: # colab
     get_ipython().__class__.__name__
     iscolab = True
 except: iscolab = False
+
+try:
+    import xformers; isxf = True
+except: isxf = False
 
 class LatentBlending():
     def __init__(self, sd, steps, cfg_scale=7, scale_mid_damper=0.5):
@@ -384,6 +388,9 @@ class LatentBlending():
                 if i > 0 and list_mixing_coeffs[i] > 0:
                     lat_mixtarget = lats_mixing[i-1].clone()
                     lat = self.slerp(lat, lat_mixtarget, list_mixing_coeffs[i]) # mix latents
+
+                if isset(self.sd.a, 'load_lora') and isxf: 
+                    cond = [cond[0].float(), cond[1].float(), cond[2]] if isinstance(cond, list) else cond.float() # otherwise q/k/v mistype error !?
 
                 if self.sd.a.sampler == 'euler':
                     lat = self.euler_step(lat, cond, self.sd.sigmas, i)
