@@ -30,11 +30,11 @@ Other features:
 
 ## Setup
 
-Install CUDA 11.6. Setup the Conda environment:
+Install CUDA 11.8. Setup the Conda environment:
 ```
 conda create -n SD python=3.10 numpy pillow 
 activate SD
-pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu116
+pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
 ```
 Install `xformers` library to increase performance. It makes possible to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). If you're on Windows, first ensure that you have Visual Studio 2019 installed. 

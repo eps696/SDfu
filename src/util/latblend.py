@@ -379,6 +379,9 @@ class LatentBlending():
             lat = lat_start.clone()
             lats_out = []
             
+            if isset(self.sd.a, 'load_lora') and isxf: 
+                cond = [cond[0].float(), cond[1].float(), cond[2]] if isinstance(cond, list) else cond.float() # otherwise q/k/v mistype error !?
+
             for i in range(self.steps):
                 if i < idx_start:
                     lats_out.append(None)
@@ -388,9 +391,6 @@ class LatentBlending():
                 if i > 0 and list_mixing_coeffs[i] > 0:
                     lat_mixtarget = lats_mixing[i-1].clone()
                     lat = self.slerp(lat, lat_mixtarget, list_mixing_coeffs[i]) # mix latents
-
-                if isset(self.sd.a, 'load_lora') and isxf: 
-                    cond = [cond[0].float(), cond[1].float(), cond[2]] if isinstance(cond, list) else cond.float() # otherwise q/k/v mistype error !?
 
                 if self.sd.a.sampler == 'euler':
                     lat = self.euler_step(lat, cond, self.sd.sigmas, i)
