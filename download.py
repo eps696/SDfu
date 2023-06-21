@@ -40,8 +40,8 @@ def main():
     get_model("https://www.dropbox.com/s/10gbecrugca1ydv/sdfu-v21v-full-fp16.zip?dl=1", 'models/v2v')
     print(' downloading SD 2-inpainting model Unet')
     get_model("https://www.dropbox.com/s/r5fa1mdxpw9e8k2/sdfu-v2i-unet-fp16.zip?dl=1", 'models/v2')
-    # print(' downloading SD 2-depth model Unet & depth')
-    # get_model("https://www.dropbox.com/s/4visx4qcscirvob/sdfu-v2d-unet-fp16.zip?dl=1", 'models/v2')
+    print(' downloading SD 2-depth model Unet & depth')
+    get_model("https://www.dropbox.com/s/4visx4qcscirvob/sdfu-v2d-unet-fp16.zip?dl=1", 'models/v2')
 
     print(' downloading SD 1.x extra VAE models')
     get_model("https://www.dropbox.com/s/z9uycihl6tybx9y/sdfu-v1-vaes-fp16.zip?dl=1", 'models/v1')

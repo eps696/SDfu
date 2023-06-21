@@ -30,17 +30,17 @@ Other features:
 
 ## Setup
 
-Install CUDA 11.8. Setup the Conda environment:
+Install CUDA 11.8 if you're in Windows (seems not necessary on Linux with Conda).  
+Setup the Conda environment:
 ```
 conda create -n SD python=3.10 numpy pillow 
 activate SD
 pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
+pip install xformers
 ```
-Install `xformers` library to increase performance. It makes possible to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
-```
-pip install git+https://github.com/facebookresearch/xformers.git
-```
+NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
+
 Run command below to download Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), [2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [ControlNet], [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
@@ -60,7 +60,7 @@ python src/gen.py -im _in/pix -t "neon light glow" --model 2d
 ```
 * Inpaint directory of images with RunwayML model, turning humans into robots:
 ```
-python src/gen.py -im _in/pix --mask "human, person" -t "steampunk robot" --model 15i
+python src/gen.py -im _in/pix --mask "human, person" -t "steampunk robot" --model 2i
 ```
 * Make a video (frame sequence), interpolating between the lines of the text file:
 ```
