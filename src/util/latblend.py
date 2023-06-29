@@ -93,10 +93,11 @@ class LatentBlending():
         self.cws = cws
         self.uc = uc
 
-    def init_lats(self, lat1, lat2):
+    def init_lats(self, lat1, lat2, cimg=None, **kwargs):
         self.branch1_cross_power = 0. # to keep initial latents intact
         self.lat_init1 = lat1
         self.lat_init2 = lat2
+        self.cimg      = cimg
 
     def run_transition(self, w, h, depth_strength=0.4, t_compute_max=None, max_branches=None, reuse=False, seeds=None):
         """ Function for computing transitions. Returns a list of transition images using spherical latent blending.
@@ -406,20 +407,22 @@ class LatentBlending():
             sigma = sigmas[i]
             t = sigma * lat.new_ones([lat.shape[0]])
             if self.cfg_scale > 0:
-                if isinstance(cond, list) and len(cond) == 3: # multi guidance lerp
-                    c1, c2, mix = cond
-                    bs = len(c1)*2 + 1
-                    noises = self.sd.kdiff_model(torch.cat([lat] * bs), t, cond=torch.cat([self.uc, c1, c2])).chunk(bs)
-                    denoised = noises[0] # uncond
-                    for n in range(len(c1)):
-                        denoised = denoised + (noises[n+1] * (1.-mix) + noises[n+1+len(c1)] * mix - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)]
-                else: # multi guidance
+                if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
+                    cond, cond2, mix = cond
+                    bs = len(cond)*2 + 1
+                    cond_in = torch.cat([self.uc, cond, cond2])
+                else:
+                    mix = 0.
                     bs = len(cond) + 1
-                    noises = self.sd.kdiff_model(torch.cat([lat] * bs), t, cond=torch.cat([self.uc, cond])).chunk(bs)
-                    denoised = noises[0] # uncond
-                    for n in range(len(cond)):
-                        denoised = denoised + (noises[n+1] - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)] # guidance
-            else:
+                    cond_in = torch.cat([self.uc, cond])
+                lat_in = torch.cat([lat] * bs)
+                noises = self.sd.kdiff_model(lat_in, t, cond=cond_in).chunk(bs)
+                denoised = noises[0] # uncond
+                for n in range(len(cond)): # multi guidance
+                    denoise_guide = noises[n+1] * (1.-mix) + noises[n+1+len(cond)] * mix - noises[0] if mix > 0 else noises[n+1] - noises[0]
+                    denoised = denoised + denoise_guide * self.cfg_scale * self.cws[n % len(self.cws)]
+                # denoised = noise_un + (noise_c1 * (1.-mix) + noise_c2 * mix - noise_un) * self.cfg_scale # single cond
+            else: # no guidance
                 denoised = self.sd.kdiff_model(lat, t, cond=self.uc)
             d = (lat - denoised) / sigma
             dt = sigmas[i + 1] - sigma
@@ -430,20 +433,29 @@ class LatentBlending():
         with self.precision_scope("cuda"):
             lat = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers!?
             if self.cfg_scale > 0:
-                if isinstance(cond, list) and len(cond) == 3: # multi guidance
-                    c1, c2, mix = cond
-                    bs = len(c1)*2 + 1
-                    noises = self.sd.unet(torch.cat([lat] * bs), t, torch.cat([self.uc, c1, c2])).sample.chunk(bs)
-                    noise_pred = noises[0] # uncond
-                    for n in range(len(c1)):
-                        noise_pred = noise_pred + (noises[n+1] * (1.-mix) + noises[n+1+len(c1)] * mix - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)]
-                else: # usual guidance
+                if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
+                    cond, cond2, mix = cond
+                    bs = len(cond)*2 + 1
+                    cond_in = torch.cat([self.uc, cond, cond2])
+                else:
+                    mix = 0.
                     bs = len(cond) + 1
-                    noises = self.sd.unet(torch.cat([lat] * bs), t, torch.cat([self.uc, cond])).sample.chunk(bs) # pred noise residual at step t
-                    noise_pred = noises[0] # uncond
-                    for n in range(len(cond)):
-                        noise_pred = noise_pred + (noises[n+1] - noises[0]) * self.cfg_scale * self.cws[n % len(self.cws)] # guidance
-            else:
+                    cond_in = torch.cat([self.uc, cond])
+                lat_in = torch.cat([lat] * bs)
+
+                if self.sd.use_cnet and self.cimg is not None:
+                    ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cimg, 1, return_dict=False)
+                    ctl_downs = [ctl_down * self.sd.a.control_scale for ctl_down in ctl_downs]
+                    ctl_mid *= self.sd.a.control_scale
+                    ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+
+                noises = self.sd.unet(lat_in, t, cond_in, **ukwargs).sample.chunk(bs) # pred noise residual at step t
+                noise_pred = noises[0] # uncond
+                for n in range(len(cond)): # multi guidance
+                    noise_guide = noises[n+1] * (1.-mix) + noises[n+1+len(cond)] * mix - noises[0] if mix > 0 else noises[n+1] - noises[0]
+                    noise_pred = noise_pred + noise_guide * self.cfg_scale * self.cws[n % len(self.cws)]
+                # noise_pred = noise_un + (noise_c1 * (1.-mix) + noise_c2 * mix - noise_un) * self.cfg_scale # single cond
+            else: # no guidance, no controlnet
                 noise_pred = self.sd.unet(lat, t, self.uc).sample
             lat = self.sd.scheduler.step(noise_pred.cpu(), t, lat.cpu(), **self.sd.sched_kwargs).prev_sample.cuda().half() # why can't make it on cuda??
         return lat

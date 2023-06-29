@@ -120,6 +120,11 @@ def main():
             W, H = [sd.res]*2 if size is None else size
             zs = [sd.rnd_z(H, W) for i in range(count)]
 
+    cdict = {} # for controlnet
+    if isset(a, 'control_mod') and os.path.exists(a.control_mod) and isset(a, 'control_img'):
+        assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
+        cdict['cimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
+
     # save key latents if needed
     if isinstance(zs, list): zs = torch.stack(zs)
     if isset(a, 'out_lats'):
@@ -135,7 +140,7 @@ def main():
                 print('.. exporting :: zs', zs.shape, 'csb', csb.shape, 'cwb', cwb.shape)
                 pbar = progbar(count)
                 for i in range(count):
-                    images = genmix(zs, csb, cwb, uc, i, **gendict, verbose=False)
+                    images = genmix(zs, csb, cwb, uc, i, **cdict, **gendict, verbose=False)
                     if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0), name='key lats')
                     try:
                         file_out = '%03d-%s' % (i, texts[i]) # , a.sampler, sd.seed
@@ -153,21 +158,21 @@ def main():
             if not a.cguide: # cond lerp (may be incoherent)
                 csb = sum([csb[:,j] * cwb[:,j,None,None] for j in range(csb.shape[1])]).unsqueeze(1)
             lb.set_conds(csb[i % len(csb)], csb[(i+1) % len(csb)], cwb[0], uc) # same weights for all multi conds!
-            lb.init_lats( zs[i % len(zs)],   zs[(i+1) % len(zs)])
+            lb.init_lats( zs[i % len(zs)],   zs[(i+1) % len(zs)], **cdict) # same control image for the whole interpolation!
             lb.run_transition(W, H, 1.- a.latblend, max_branches = a.fstep, reuse = i>0)
             img_count += lb.save_imgs(a.out_dir, img_count, skiplast=a.skiplast)
             pbar.upd(uprows=2)
         else:
             for f in range(a.fstep):
                 tt = blend(f / a.fstep, a.curve)
-                images = genmix(zs, csb, cwb, uc, i, tt, **gendict)
+                images = genmix(zs, csb, cwb, uc, i, tt, **cdict, **gendict)
                 if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0))
                 save_img(images[0], i * a.fstep + f, a.out_dir)
                 pbar.upd(uprows=2)
             img_count = pcount * a.fstep
 
     if a.loop is not True:
-        images = genmix(zs, csb, cwb, uc, pcount, **gendict)
+        images = genmix(zs, csb, cwb, uc, pcount, **cdict, **gendict)
         save_img(images[0], img_count, a.out_dir)
 
 

@@ -68,8 +68,27 @@ class SDfu:
             self.load_model_custom(a, vae, text_encoder, tokenizer, unet, scheduler)
         self.pipe.to(device)
 
+        # load finetuned stuff
+        mod_tokens = None
+        if  isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
+            from .finetune import load_loras
+            mod_tokens = load_loras(torch.load(a.load_lora), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
+        elif  isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
+            from .finetune import load_delta, custom_diff
+            self.pipe.unet = custom_diff(self.pipe.unet, train=False)
+            mod_tokens = load_delta(torch.load(a.load_custom), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
+        elif isset(a, 'load_token') and os.path.exists(a.load_token): # text inversion
+            from .finetune import load_embeds
+            emb_files = [a.load_token] if os.path.isfile(a.load_token) else file_list(a.load_token, 'pt')
+            mod_tokens = []
+            for emb_file in emb_files:
+                mod_tokens += load_embeds(torch.load(emb_file), self.pipe.text_encoder, self.pipe.tokenizer)
+        if mod_tokens is not None: print(' loaded tokens:', mod_tokens[0] if len(mod_tokens)==1 else mod_tokens)
+
+        # load controlnet
         if isset(a, 'control_mod'):
             if not os.path.exists(a.control_mod): a.control_mod = os.path.join(a.maindir, 'control', a.control_mod)
+            assert self.use_kdiff is not True, "ControlNet does not work with k-samplers"
             assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
             from diffusers import ControlNetModel
             self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
@@ -81,7 +100,7 @@ class SDfu:
         self.final_setup(a)
 
     def load_model_external(self, model_path):
-        self.pipe = DiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
+        self.pipe = DiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16)
         self.text_encoder = self.pipe.text_encoder
         self.tokenizer    = self.pipe.tokenizer
         self.unet         = self.pipe.unet
@@ -122,23 +141,6 @@ class SDfu:
         if not isxf: vae.enable_slicing()
         self.vae = vae
 
-        # load finetuned stuff
-        mod_tokens = None
-        if  isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
-            from .finetune import load_loras
-            mod_tokens = load_loras(torch.load(a.load_lora), unet, text_encoder, tokenizer)
-        elif  isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
-            from .finetune import load_delta, custom_diff
-            unet = custom_diff(unet, train=False)
-            mod_tokens = load_delta(torch.load(a.load_custom), unet, text_encoder, tokenizer)
-        elif isset(a, 'load_token') and os.path.exists(a.load_token): # text inversion
-            from .finetune import load_embeds
-            emb_files = [a.load_token] if os.path.isfile(a.load_token) else file_list(a.load_token, 'pt')
-            mod_tokens = []
-            for emb_file in emb_files:
-                mod_tokens += load_embeds(torch.load(emb_file), text_encoder, tokenizer)
-        if mod_tokens is not None: print(' loaded tokens:', mod_tokens[0] if len(mod_tokens)==1 else mod_tokens)
-
         if scheduler is None:
             sched_path = os.path.join(a.maindir, self.subdir, 'scheduler_config.json')
             self.sched_kwargs = {}
@@ -168,6 +170,7 @@ class SDfu:
                 elif a.sampler == 'euler_a': self.sampling_fn = K.sampling.sample_euler_ancestral
                 elif a.sampler == 'dpm2_a':  self.sampling_fn = K.sampling.sample_dpm_2_ancestral # slow but rich!
                 else: print(' Unknown sampler', a.sampler); exit()
+        self.use_kdiff = hasattr(scheduler, 'sigmas') # k-diffusion sampling
         self.scheduler = scheduler
 
         self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
@@ -175,7 +178,6 @@ class SDfu:
     def final_setup(self, a):
         if isxf: self.pipe.enable_xformers_memory_efficient_attention()
         # sampling
-        self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
         self.set_steps(a.steps, a.strength)
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
