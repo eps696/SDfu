@@ -28,7 +28,7 @@ try:
 except: isxf = False
 
 class LatentBlending():
-    def __init__(self, sd, steps, cfg_scale=7, scale_mid_damper=0.5):
+    def __init__(self, sd, steps, cfg_scale=7, strength=1., scale_mid_damper=0.5, verbose=True):
         """ Initializes the latent blending class.
             cfg_scale: float
                 Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
@@ -46,8 +46,8 @@ class LatentBlending():
         """
         self.sd = sd
         self.device = torch.device('cuda')
-        self.steps = steps
-        self.sd.set_steps(self.steps)
+        self.steps = min(int(steps * strength), steps)
+        self.sd.set_steps(steps, strength)
 
         assert scale_mid_damper > 0 and scale_mid_damper <= 1.0, f"scale_mid_damper neees to be in interval (0,1], you provided {scale_mid_damper}"
         self.scale_mid_damper = scale_mid_damper
@@ -75,6 +75,7 @@ class LatentBlending():
 
         self.scale_base = cfg_scale
         self.cfg_scale = cfg_scale
+        self.verbose = verbose
 
         self.dt_per_diff = 0
         self.lpips = lpips.LPIPS(net='alex', verbose=False).cuda()
@@ -146,7 +147,7 @@ class LatentBlending():
 
         # Run iteratively, starting with the longest trajectory.
         # Always inserting new branches where they are needed most according to image similarity
-        if not iscolab: pbar = progbar(sum(list_num_stems))
+        if self.verbose and not iscolab: pbar = progbar(sum(list_num_stems))
         for s_idx in range(len(idxs_injection)):
             num_stems = list_num_stems[s_idx]
             idx_injection = idxs_injection[s_idx]
@@ -156,7 +157,7 @@ class LatentBlending():
                 lats = self.compute_latents_mix(fract_mixing, b_parent1, b_parent2, idx_injection)
                 self.insert_into_tree(fract_mixing, idx_injection, lats)
                 # print(f"fract_mixing: {fract_mixing} idx_injection {idx_injection}")
-                if not iscolab: pbar.upd()
+                if self.verbose and not iscolab: pbar.upd()
 
     def compute_latents1(self):
         # diffusion trajectory 1

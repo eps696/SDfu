@@ -18,7 +18,6 @@ def get_args(parser):
     parser.add_argument('-lb', '--latblend', default=0, type=float, help="Strength of latent blending, if > 0: 0.1 ~ alpha-blend, 0.9 ~ full rebuild")
     parser.add_argument('-lg', '--lguide',  action='store_true', help='Use noise multiguidance for interpolation, instead of cond lerp')
     parser.add_argument(       '--curve',   default='linear', help="Interpolating curve: bezier, parametric, custom or linear")
-    parser.add_argument('-n',  '--num',     default=1, type=int)
     parser.add_argument(       '--loop',    action='store_true', help='Loop inputs [or stop at the last one]')
     parser.add_argument(       '--skiplast', action='store_true', help='Skip repeating last frame (for smoother animation)')
     return parser.parse_args()

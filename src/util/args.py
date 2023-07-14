@@ -29,6 +29,7 @@ def main_args():
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
     parser.add_argument('--precision',      default='autocast')
     parser.add_argument('-b',  '--batch',   default=1, type=int, help="batch size")
+    parser.add_argument('-n',  '--num',     default=1, type=int, help="Repeat prompts N times")
     parser.add_argument('-S',  '--seed',    type=int, help="image seed")
     # finetuned stuff
     parser.add_argument('-rt', '--load_token', default=None, help="path to the text inversion embeddings file")

@@ -294,7 +294,7 @@ class SDfu:
                         for i in range(len(noises)-1):
                             noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here
                     return noise_pred
-                lat = self.sampling_fn(model_fn, lat, self.sigmas[offset:])
+                lat = self.sampling_fn(model_fn, lat, self.sigmas[offset:], disable = not verbose)
                 if verbose and not iscolab: print() # compensate pbar printout
 
             else:

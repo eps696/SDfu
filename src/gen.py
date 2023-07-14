@@ -11,7 +11,6 @@ from util.utils import load_img, save_img, calc_size, isok, isset, img_list, bas
 def get_args(parser):
     # override
     parser.add_argument('-sm', '--sampler', default='pndm', choices=samplers)
-    parser.add_argument('-n',  '--num',     default=1, type=int)
     return parser.parse_args()
 
 @torch.no_grad()
