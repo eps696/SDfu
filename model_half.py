@@ -2,6 +2,7 @@ import os
 import argparse
 import collections
 import pickle
+from shutil import move
 import torch
 
 parser = argparse.ArgumentParser()
@@ -37,8 +38,9 @@ def float2half(data):
 models = file_list(a.dir, a.ext)
 
 for model_path in models:
-    file_out = basename(model_path) + '-half' + os.path.splitext(model_path)[-1]
     model = torch.load(model_path)
     model = float2half(model)
-    torch.save(model, file_out)
+    file_bak = basename(model_path) + '-full' + os.path.splitext(model_path)[-1]
+    move(model_path, file_bak)
+    torch.save(model, model_path)
 

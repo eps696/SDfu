@@ -1,9 +1,9 @@
 import argparse
 
 samplers = ['klms', 'uni', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
-models = ['15', '15drm', '15i', '2i', '21', '21v'] # !! only 15 is uncensored !!
+models = ['15', '15drm', '2i', '21', '21v', 'vzs', 'vpot'] # !! only 15 and 15drm are uncensored !!
 unprompt = ""
-# unprompt = "low quality, poorly drawn, out of focus, blurry, tiled, segmented" # , oversaturated, [[[ugly]]]
+unprompt = "low quality, poorly drawn, out of focus, blurry, tiled, segmented, oversaturated"
 # unprompt += ", letters, text, titles, graffiti, typography, watermarks, writings"
 # unprompt += ", human, people, man, girl, face"
 # unprompt += ", ugly, deformed, disfigured, mutated, mutilated, bad anatomy, malformed hands, extra limbs"
@@ -20,7 +20,7 @@ def main_args():
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
     parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
     # mandatory params
-    parser.add_argument('-m',  '--model',   default='15', choices=models, help="model version")
+    parser.add_argument('-m',  '--model',   default='15', help="SD model to use")
     parser.add_argument('-sm', '--sampler', default='ddim', choices=samplers)
     parser.add_argument(       '--vae',     default='ema', help='orig, ema, mse')
     parser.add_argument('-C','--cfg_scale', default=7.5, type=float, help="prompt guidance scale")
@@ -42,6 +42,7 @@ def main_args():
     # misc
     parser.add_argument('-cg', '--cguide',  action='store_true', help='Use noise guidance for interpolation, instead of cond lerp')
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
+    parser.add_argument('-lo', '--lowmem',  action='store_true', help='Offload subnets onto CPU for higher resolution [slower]')
     parser.add_argument('-inv', '--invert_mask', action='store_true')
     parser.add_argument('-v',  '--verbose', action='store_true')
 

@@ -46,8 +46,7 @@ class LatentBlending():
         """
         self.sd = sd
         self.device = torch.device('cuda')
-        self.steps = min(int(steps * strength), steps)
-        self.sd.set_steps(steps, strength)
+        self.set_steps(steps, strength)
 
         assert scale_mid_damper > 0 and scale_mid_damper <= 1.0, f"scale_mid_damper neees to be in interval (0,1], you provided {scale_mid_damper}"
         self.scale_mid_damper = scale_mid_damper
@@ -81,6 +80,10 @@ class LatentBlending():
         self.lpips = lpips.LPIPS(net='alex', verbose=False).cuda()
         self.slerp = slerp2 if self.sd.a.sampler == 'euler' else slerp
 
+    def set_steps(self, steps, strength):
+        self.steps = min(int(steps * strength), steps)
+        self.sd.set_steps(steps, strength)
+
     def set_scale_mid_damp(self, fract_mixing):
         # Tunes the guidance scale down as a linear function of fract_mixing, towards 0.5 the minimum will be reached.
         mid_factor = 1 - np.abs(fract_mixing - 0.5) / 0.5
@@ -102,12 +105,6 @@ class LatentBlending():
 
     def run_transition(self, w, h, depth_strength=0.4, t_compute_max=None, max_branches=None, reuse=False, seeds=None):
         """ Function for computing transitions. Returns a list of transition images using spherical latent blending.
-            reuse_img1: Optional[bool]:
-                Don't recompute the latents for the first keyframe (purely prompt1). Saves compute.
-            reuse_img2: Optional[bool]:
-                Don't recompute the latents for the second keyframe (purely prompt2). Saves compute.
-            num_inference_steps:
-                Number of diffusion steps. Higher values will take more compute time.
             depth_strength:
                 Determines how deep the first injection will happen.
                 Deeper injections (low values) may cause (unwanted) formation of new structures, shallow (high) values will go into alpha-blendy land.
@@ -117,6 +114,8 @@ class LatentBlending():
             max_branches: int
                 Either provide t_compute_max or max_branches. The maximum number of branches to be computed. Higher values give better
                 results. Use this if you want to have controllable results independent of your computer.
+            reuse: Optional[bool]:
+                Don't recompute the latents (purely prompt1). Saves compute.
             seeds: Optional[List[int)]:
                 You can supply two seeds that are used for the first and second keyframe (prompt1 and prompt2).
                 Otherwise random seeds will be taken.
@@ -198,7 +197,7 @@ class LatentBlending():
         """
         if self.cfg_scale == 0: # no guidance
             cond = None
-        elif self.sd.a.lguide: # multi guidance
+        elif isset(self.sd.a, 'lguide') and self.sd.a.lguide is True: # multi guidance
             cond = [self.text_emb1, self.text_emb2, fract_mixing]
         else: # cond lerp
             cond = lerp(self.text_emb1, self.text_emb2, fract_mixing) if self.cfg_scale > 0 else None
@@ -370,7 +369,7 @@ class LatentBlending():
             assert len(mix_coeffs) == self.steps
             list_mixing_coeffs = mix_coeffs
         else:
-            raise ValueError("mix_coeffs should be float or list with len=num_inference_steps")
+            raise ValueError("mix_coeffs should be float or list with len = steps")
 
         if np.sum(list_mixing_coeffs) > 0:
             assert len(lats_mixing) == self.steps
@@ -444,6 +443,7 @@ class LatentBlending():
                     cond_in = torch.cat([self.uc, cond])
                 lat_in = torch.cat([lat] * bs)
 
+                ukwargs = {}
                 if self.sd.use_cnet and self.cimg is not None:
                     ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cimg, 1, return_dict=False)
                     ctl_downs = [ctl_down * self.sd.a.control_scale for ctl_down in ctl_downs]

@@ -129,17 +129,18 @@ def read_txt(txt):
         lines = [txt]
     return lines
 
-def parse_line(txt):
+def parse_line(txt, splitter='~'):
     subs = []
     wts = []
     for subtxt in txt.split('|'):
-        if '~' in subtxt:
-            [subtxt, wt] = subtxt.split('~')
+        if splitter in subtxt:
+            [subtxt, wt] = subtxt.split(splitter)
             wt = float(wt)
         else: 
             wt = 1.
         subs += [subtxt.strip()]
         wts  += [wt]
+    if all([w > 0 for w in wts]): wts = [w / sum(wts) for w in wts] # norm weights if all positive
     return subs, wts
 
 def txt_clean(txt):

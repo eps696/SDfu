@@ -7,8 +7,9 @@ import torch
 import torch.nn.functional as F
 
 from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers.models import AutoencoderKL, UNet2DConditionModel
+from diffusers.models import AutoencoderKL
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers.utils import is_accelerate_available, is_accelerate_version
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 
@@ -62,18 +63,19 @@ class SDfu:
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
 
-        if a.model not in models: # downloaded or url
-            self.load_model_external(a.model)
-        else:
+        if a.model in models:
             self.load_model_custom(a, vae, text_encoder, tokenizer, unet, scheduler)
-        self.pipe.to(device)
+        else: # downloaded or url
+            self.load_model_external(a.model)
+        self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
+        if not self.a.lowmem: self.pipe.to(device)
 
         # load finetuned stuff
         mod_tokens = None
-        if  isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
+        if isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
             from .finetune import load_loras
             mod_tokens = load_loras(torch.load(a.load_lora), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
-        elif  isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
+        elif isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
             from .finetune import load_delta, custom_diff
             self.pipe.unet = custom_diff(self.pipe.unet, train=False)
             mod_tokens = load_delta(torch.load(a.load_custom), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
@@ -92,7 +94,7 @@ class SDfu:
             assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
             from diffusers import ControlNetModel
             self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
-            self.cnet.to(device)
+            if not self.a.lowmem: self.cnet.to(device)
             self.pipe.register_modules(controlnet=self.cnet)
             if a.verbose: print(' loaded ControlNet', a.control_mod)
         self.use_cnet = hasattr(self, 'cnet')
@@ -111,14 +113,15 @@ class SDfu:
     def load_model_custom(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # paths
         self.clipseg_path = os.path.join(a.maindir, 'clipseg/rd64-uni.pth')
-        vtype = a.model[-1] == 'v'
-        self.subdir = 'v2v' if vtype else 'v2' if a.model[0]=='2' else 'v1'
+        vtype  = a.model[-1] == 'v'
+        vidtype = a.model[0] == 'v'
+        self.subdir = 'v2v' if vtype else 'v2' if vidtype or a.model[0]=='2' else 'v1'
 
         if vtype and not isxf: # scheduler.prediction_type == "v_prediction":
             print(" V-models require xformers! install it or use another model"); exit()
 
         # text input
-        txtenc_path = os.path.join(a.maindir, self.subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text') # !!!
+        txtenc_path = os.path.join(a.maindir, self.subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text')
         if text_encoder is None:
             text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True)
         if tokenizer is None:
@@ -128,7 +131,11 @@ class SDfu:
 
         if unet is None:
             unet_path = os.path.join(a.maindir, self.subdir, 'unet' + a.model)
-            unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16, local_files_only=True)
+            if vidtype:
+                from diffusers.models import UNet3DConditionModel as UNet
+            else:
+                from diffusers.models import UNet2DConditionModel as UNet
+            unet = UNet.from_pretrained(unet_path, torch_dtype=torch.float16, local_files_only=True)
         if not isxf and isinstance(unet.config.attention_head_dim, int): unet.set_attention_slice(unet.config.attention_head_dim // 2) # 8
         self.unet = unet
 
@@ -138,7 +145,7 @@ class SDfu:
                 vae_path = 'vae-ft-mse' if a.vae=='mse' else 'vae-ft-ema'
             vae_path = os.path.join(a.maindir, self.subdir, vae_path)
             vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16)
-        if not isxf: vae.enable_slicing()
+        if vidtype or not isxf: vae.enable_slicing()
         self.vae = vae
 
         if scheduler is None:
@@ -170,18 +177,16 @@ class SDfu:
                 elif a.sampler == 'euler_a': self.sampling_fn = K.sampling.sample_euler_ancestral
                 elif a.sampler == 'dpm2_a':  self.sampling_fn = K.sampling.sample_dpm_2_ancestral # slow but rich!
                 else: print(' Unknown sampler', a.sampler); exit()
-        self.use_kdiff = hasattr(scheduler, 'sigmas') # k-diffusion sampling
         self.scheduler = scheduler
 
         self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
 
     def final_setup(self, a):
         if isxf: self.pipe.enable_xformers_memory_efficient_attention()
-        # sampling
-        self.set_steps(a.steps, a.strength)
+        self.set_steps(a.steps, a.strength) # sampling
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
-        self.res = self.unet.config.sample_size * self.vae_scale # original model resolution
+        self.res = self.unet.config.sample_size * self.vae_scale # original model resolution (not for video models!)
         try:
             uchannels = self.unet.config.in_channels
         except: 
@@ -196,6 +201,18 @@ class SDfu:
             self.depth_estimator = DPTForDepthEstimation.from_pretrained(depth_path, torch_dtype=torch.float16).to(device)
             self.feat_extractor  = DPTImageProcessor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
 
+        # enable_model_cpu_offload
+        if self.a.lowmem:
+            assert is_accelerate_available() and is_accelerate_version(">=", "0.17.0.dev0"), " Install accelerate > 0.17 for model offloading"
+            from accelerate import cpu_offload_with_hook
+            hook = None
+            for cpu_offloaded_model in [self.text_encoder, self.unet, self.vae]:
+                _, hook = cpu_offload_with_hook(cpu_offloaded_model, device, prev_module_hook=hook)
+            if self.use_cnet:
+                _, hook = cpu_offload_with_hook(self.cnet, device, prev_module_hook=hook)
+                cpu_offload_with_hook(self.cnet, device)
+            self.final_offload_hook = hook
+
 
     def setseed(self, seed=None):
         self.seed = seed or int((time.time()%1)*69696)
@@ -203,7 +220,6 @@ class SDfu:
     
     def set_steps(self, steps, strength=1., warmup=1, device=device):
         self.scheduler.set_timesteps(steps, device=device)
-        if not isset(self.a, 'in_img'): strength = 1. # strength is also needed for feedback loops
         steps = min(int(steps * strength), steps) # t_enc .. 37
         if self.use_kdiff:
             self.sigmas = self.scheduler.sigmas[-steps - warmup :]
@@ -226,11 +242,17 @@ class SDfu:
         lats = self.vae.encode(image).latent_dist.sample() * self.vae.config.scaling_factor
         return torch.cat([lats])
 
-    def ddim_inv(self, lat, cond): # ddim inversion, slower, ~exact
+    def ddim_inv(self, lat, cond, cimg=None): # ddim inversion, slower, ~exact
+        ukwargs = {}
         with self.precision_scope('cuda'):
             for t in reversed(self.scheduler.timesteps):
                 with torch.no_grad():
-                    noise_pred = self.unet(lat, t, cond).sample
+                    if self.use_cnet and cimg is not None: # controlnet
+                        ctl_downs, ctl_mid = self.cnet(lat, t, cond, cimg, 1, return_dict=False)
+                        ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
+                        ctl_mid *= self.a.control_scale
+                        ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                    noise_pred = self.unet(lat, t, cond, **ukwargs).sample
                 lat = self.next_step_ddim(noise_pred, t, lat)
         return lat
 
@@ -244,13 +266,16 @@ class SDfu:
     def img_z(self, image):
         return self.lat_z(self.img_lat(image))
 
-    def rnd_z(self, H, W):
-        shape_ = (self.a.batch, 4, H // self.vae_scale, W // self.vae_scale)
+    def rnd_z(self, H, W, frames=None):
+        if frames is None: # image
+            shape_ = (self.a.batch, 4,         H // self.vae_scale, W // self.vae_scale)
+        else: # video
+            shape_ = (self.a.batch, 4, frames, H // self.vae_scale, W // self.vae_scale)
         lat = torch.randn(shape_, generator=self.g_, device=device)
         return self.scheduler.init_noise_sigma * lat
 
     def prep_mask(self, mask_str, img_path, init_image=None):
-        image_pil = load_img(img_path, tensor=False)
+        image_pil, _ = load_img(img_path, tensor=False)
         if init_image is None:
             init_image, (W,H) = load_img(img_path)
         mask = makemask(mask_str, image_pil, self.a.invert_mask, model_path=self.clipseg_path)
@@ -298,7 +323,6 @@ class SDfu:
                 if verbose and not iscolab: print() # compensate pbar printout
 
             else:
-                log = 'gen sched %d, ts %d' % (len(self.scheduler.timesteps), len(self.timesteps))
                 if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
                 for t in self.timesteps[offset:]:
                     lat_in = lat # scheduler.scale_model_input(lat, t) # scales only k-samplers! ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
@@ -312,10 +336,14 @@ class SDfu:
                         lat_in = torch.cat([lat_in] * bs) # expand latents for classifier free guidance
 
                     if self.use_cnet and cimg is not None: # controlnet fits max 960x640 on 16gb vram
+                        if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                            self.unet.to("cpu"); torch.cuda.empty_cache()
                         ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cimg, 1, return_dict=False)
                         ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
                         ctl_mid *= self.a.control_scale
                         ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                        if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                            self.cnet.to("cpu"); torch.cuda.empty_cache()
                     
                     if cfg_scale in [0, 1]:
                         noise_pred = self.unet(lat_in, t, conds, **ukwargs).sample
@@ -326,12 +354,24 @@ class SDfu:
                             noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here
 
                     lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
-                    if verbose and not iscolab: pbar.upd(log)
+                    if verbose and not iscolab: pbar.upd()
 
             if isok(mask, masked_lat) and not self.inpaintmod: # inpaint with standard models
                 lat = masked_lat * mask + lat * (1.-mask)
 
             # decode latents
             lat /= self.vae.config.scaling_factor
-            return self.vae.decode(lat).sample
+
+            if len(lat.shape)==5: # video
+                lat = lat.permute(0,2,1,3,4).squeeze(0) # [f,c,h,w]
+                output = self.vae.decode(lat).sample
+                output = output[None,:].permute(0,2,1,3,4) # [1,c,f,h,w]
+            else: # image
+                output = self.vae.decode(lat).sample
+
+            # Offload last model
+            if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                self.final_offload_hook.offload()
+
+            return output
 

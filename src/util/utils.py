@@ -2,9 +2,12 @@ import os, sys
 import numpy as np
 from PIL import Image, ImageOps
 import cv2
-import skimage
 import pickle
 import collections
+import math
+import skimage
+import scipy
+from scipy.interpolate import CubicSpline as CubSpline
 
 import torch
 import torch.nn.functional as F
@@ -34,12 +37,13 @@ def isset(a, *itms): # all exist, not None, not False, len > 0
             oks += [True]
     return all(oks)
 
-def cvshow(img_t, name='t'):
-    img_np = torch.clip((img_t+1)*127.5, 0, 255).cpu().numpy().astype(np.uint8)
-    cv2.imshow(name, img_np[:,:,::-1])
+def cvshow(img, name='t'):
+    if torch.is_tensor(img):
+        img = torch.clip((img+1)*127.5, 0, 255).cpu().numpy().astype(np.uint8)
+    cv2.imshow(name, img[:,:,::-1])
     cv2.waitKey(1)
 
-def calc_size(size, model, verbose=True):
+def calc_size(size, model, verbose=True, quant=8):
     if size.lower() == 'max':
         gpuram = gpu_ram()
         if model[-1]=='v':
@@ -49,7 +53,7 @@ def calc_size(size, model, verbose=True):
         if verbose: print('GPU RAM', gpuram, 'resolution', size)
     size = [int(s) for s in size.split('-')]
     if len(size)==1: size = size * 2
-    w, h = map(lambda x: x - x % 8, size)  # resize to integer multiple of 8
+    w, h = map(lambda x: x - x % quant, size)  # resize to integer multiple of 8
     return w, h
 
 def lerp(v0, v1, x):
@@ -108,7 +112,7 @@ def load_img(path, size=None, tensor=True):
     w, h = map(lambda x: x - x % 8, (w, h))  # resize to integer multiple of 8
     resampl = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
     image = image.resize((w,h), resampl) # (w,h)
-    if not tensor: return image
+    if not tensor: return image, (w,h)
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0,3,1,2)
     image = torch.from_numpy(image).to(device)
@@ -119,7 +123,7 @@ def save_img(image, num, out_dir, prefix='', filepath=None):
     if filepath is None: filepath = '%05d.jpg' % num
     Image.fromarray(image.astype(np.uint8)).save(os.path.join(out_dir, prefix + filepath))
 
-def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, model_path='models/clipseg/rd64-uni.pth'):
+def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, tensor=True, model_path='models/clipseg/rd64-uni.pth'):
     if os.path.isfile(mask_str): 
         mask = load_img(mask_str, tensor=False)
         mask = ImageOps.invert(mask.convert('L'))
@@ -130,8 +134,7 @@ def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, model_path
         mask = txt2mask.segment(image, mask_str).to_mask(float(threshold))
         # image.putalpha(mask)
     if invert_mask: mask = ImageOps.invert(mask)
-    w, h = mask.size
-    w, h = map(lambda x: x - x % 8, (w, h))  # resize to integer multiple of 8
+    if not tensor: return mask
     mask = np.array(mask).astype(np.float32) / 255.0
     mask = torch.from_numpy(mask[None][None]).to(device)
     return mask
@@ -263,6 +266,87 @@ def print_dict(dict, file=None, path="", indent=''):
             else:
                 file.write('%s%s: %s \n' % (indent, str(k), str(dict[k])))
 
+# = = = = = = = = = = = = = = = = = = = = = = = = = = = 
+
+def get_z(shape, rnd, uniform=False):
+    if uniform:
+        return rnd.uniform(0., 1., shape)
+    else:
+        return rnd.randn(*shape) # *x unpacks tuple/list to sequence
+
+def make_lerps(z1, z2, num_steps): 
+    vectors = []
+    xs = [step / (num_steps - 1) for step in range(num_steps)]
+    for x in xs:
+        interpol = z1 + (z2 - z1) * x
+        vectors.append(interpol)
+    return np.array(vectors)
+
+# interpolate on hypersphere
+def make_slerps(z1, z2, num_steps):
+    z1_norm = np.linalg.norm(z1)
+    z2_norm = np.linalg.norm(z2)
+    z2_normal = z2 * (z1_norm / z2_norm)
+    vectors = []
+    xs = [step / (num_steps - 1) for step in range(num_steps)]
+    for x in xs:
+        interplain = z1 + (z2 - z1) * x
+        interp = z1 + (z2_normal - z1) * x
+        interp_norm = np.linalg.norm(interp)
+        interpol_normal = interplain * (z1_norm / interp_norm)
+        # interpol_normal = interp * (z1_norm / interp_norm)
+        vectors.append(interpol_normal)
+    return np.array(vectors)
+
+def cublerp(points, steps, fstep, looped=True):
+    keys = np.array([i*fstep for i in range(steps)] + [steps*fstep])
+    last_pt_num = 0 if looped is True else -1
+    points = np.concatenate((points, np.expand_dims(points[last_pt_num], 0)))
+    cspline = CubSpline(keys, points)
+    return cspline(range(steps*fstep+1))
+
+def latent_anima(shape, frames, transit, key_latents=None, uniform=False, cubic=False, start_lat=None, seed=None, looped=True, verbose=False):
+    if key_latents is None:
+        transit = int(max(1, min(frames//2, transit)))
+    steps = max(1, math.ceil(frames / transit))
+    log = ' timeline: %d steps by %d' % (steps, transit)
+
+    if seed is None:
+        seed = np.random.seed(int((time.time()%1) * 9999))
+    rnd = np.random.RandomState(seed)
+    
+    # make key points
+    if key_latents is None:
+        key_latents = np.array([get_z(shape, rnd, uniform) for i in range(steps)])
+    if start_lat is not None:
+        key_latents[0] = start_lat
+
+    latents = np.expand_dims(key_latents[0], 0)
+    
+    # populate lerp between key points
+    if transit == 1:
+        latents = key_latents
+    else:
+        if cubic:
+            latents = cublerp(key_latents, steps, transit, looped)
+            log += ', cubic'
+        else:
+            for i in range(steps):
+                zA = key_latents[i]
+                lat_num = (i+1)%steps if looped is True else min(i+1, steps-1)
+                zB = key_latents[lat_num]
+                if uniform is True:
+                    interps_z = make_lerps(zA, zB, transit)
+                else:
+                    interps_z = make_slerps(zA, zB, transit)
+                latents = np.concatenate((latents, interps_z))
+    latents = np.array(latents)
+    
+    if verbose: print(log)
+    if latents.shape[0] > frames: # extra frame
+        latents = latents[1:]
+    return latents
+    
 # # # = = = progress bar = = = # # #
 
 import time
