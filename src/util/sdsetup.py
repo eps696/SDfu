@@ -90,7 +90,6 @@ class SDfu:
         # load controlnet
         if isset(a, 'control_mod'):
             if not os.path.exists(a.control_mod): a.control_mod = os.path.join(a.maindir, 'control', a.control_mod)
-            assert self.use_kdiff is not True, "ControlNet does not work with k-samplers"
             assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
             from diffusers import ControlNetModel
             self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
@@ -183,7 +182,6 @@ class SDfu:
 
     def final_setup(self, a):
         if isxf: self.pipe.enable_xformers_memory_efficient_attention()
-        self.set_steps(a.steps, a.strength) # sampling
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
         self.res = self.unet.config.sample_size * self.vae_scale # original model resolution (not for video models!)
@@ -193,13 +191,17 @@ class SDfu:
             uchannels = self.unet.in_channels
         self.inpaintmod = uchannels==9
         assert not (self.inpaintmod and not isset(a, 'mask')), '!! Inpainting model requires mask !!' 
-        assert not (uchannels != 4 and self.use_kdiff), "!! K-samplers don't work with depth/inpaint models !!"
         self.depthmod = uchannels==5
         if self.depthmod:
             from transformers import DPTForDepthEstimation, DPTImageProcessor
             depth_path = os.path.join(a.maindir, self.subdir, 'depth')
             self.depth_estimator = DPTForDepthEstimation.from_pretrained(depth_path, torch_dtype=torch.float16).to(device)
             self.feat_extractor  = DPTImageProcessor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
+        if isset(a, 'img_scale'): # instruct pix2pix
+            assert not (self.use_cnet or a.cfg_scale in [0,1]), "Use either Instruct-pix2pix or Controlnet guidance"
+            a.strength = 1.
+
+        self.set_steps(a.steps, a.strength) # sampling
 
         # enable_model_cpu_offload
         if self.a.lowmem:
@@ -240,7 +242,7 @@ class SDfu:
     def img_lat(self, image):
         if self.use_half: image = image.half()
         lats = self.vae.encode(image).latent_dist.sample() * self.vae.config.scaling_factor
-        return torch.cat([lats])
+        return torch.cat([lats] * self.a.batch)
 
     def ddim_inv(self, lat, cond, cimg=None): # ddim inversion, slower, ~exact
         ukwargs = {}
@@ -294,27 +296,49 @@ class SDfu:
         dd = 2. * (dd - depth_min) / (depth_max - depth_min) - 1.
         return {'depth': dd} # [1,1,64,64]
 
-    def generate(self, lat, cs, uc, cfg_scale=None, mask=None, masked_lat=None, depth=None, cws=None, cimg=None, offset=0, verbose=True):
+    def generate(self, lat, cs, uc, cfg_scale=None, mask=None, masked_lat=None, depth=None, cws=None, cimg=None, ilat=None, offset=0, verbose=True):
         if cfg_scale is None: cfg_scale = self.a.cfg_scale
         with torch.no_grad(), self.precision_scope('cuda'):
             if cws is None or not len(cws) == len(cs): cws = [1 / len(cs)] * len(cs)
             if self.a.batch > 1:
                 uc = uc.repeat(self.a.batch, 1, 1)
                 cs = cs.repeat_interleave(self.a.batch, 0)
-            conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs])
+            conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if isset(self.a, 'load_lora') and isxf: conds = conds.float() # otherwise q/k/v mistype error
             bs = len(conds) // self.a.batch
             if cimg is not None:
                 cimg = cimg.repeat_interleave(len(conds) // len(cimg), 0)
+            if ilat is not None: 
+                ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
             ukwargs = {} # kwargs placeholder for controlnet
 
             if self.use_kdiff:
                 def model_fn(x, t):
+                    ukwargs = {} # kwargs placeholder for controlnet
+                    if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
+                        x = torch.cat([x, 1.-mask, masked_lat], dim=1)
+                    elif isok(depth) and self.depthmod: # depth model
+                        x = torch.cat([x, depth], dim=1)
+
+                    x, t = torch.cat([x] * bs), torch.cat([t] * bs) # expand latents for guidance
+
+                    if self.use_cnet and cimg is not None: # controlnet = max 960x640 or 768 on 16gb
+                        ctl_downs, ctl_mid = self.cnet(x, t, conds, cimg, 1, return_dict=False)
+                        ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
+                        ctl_mid *= self.a.control_scale
+                        ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+
                     if cfg_scale in [0, 1]:
-                        noise_pred = self.kdiff_model(x, t, cond=conds)
+                        noise_pred = self.kdiff_model(x, t, cond=conds, **ukwargs)
+                    elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
+                        sigma = self.sigmas[(self.sigmas == t[0]).nonzero().item()]
+                        x_scaled = x / ((sigma**2 + 1) ** 0.5) # from scheduler.scale_model_input (does not work here)
+                        noises = self.kdiff_model(torch.cat([x_scaled, ilat], dim=1), t, cond=conds) # [noise_un, noise_img, noise_txt, ..]
+                        noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
+                        for i in range(len(noises)-2):
+                            noise_pred = noise_pred + (noises[i+2] - noises[1]) * cfg_scale * cws[i % len(cws)] # prompt guidance
                     else:
-                        lat_in, t = torch.cat([x] * bs), torch.cat([t] * bs)
-                        noises = self.kdiff_model(lat_in, t, cond=conds).chunk(bs)
+                        noises = self.kdiff_model(x, t, cond=conds, **ukwargs).chunk(bs)
                         noise_pred = noises[0] # uncond
                         for i in range(len(noises)-1):
                             noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here
@@ -325,15 +349,14 @@ class SDfu:
             else:
                 if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
                 for t in self.timesteps[offset:]:
-                    lat_in = lat # scheduler.scale_model_input(lat, t) # scales only k-samplers! ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
+                    lat_in = self.scheduler.scale_model_input(lat, t) # ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
 
                     if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
                         lat_in = torch.cat([lat_in, 1.-mask, masked_lat], dim=1)
                     elif isok(depth) and self.depthmod: # depth model
                         lat_in = torch.cat([lat_in, depth], dim=1)
 
-                    if bs > 1: 
-                        lat_in = torch.cat([lat_in] * bs) # expand latents for classifier free guidance
+                    lat_in = torch.cat([lat_in] * bs) # expand latents for guidance
 
                     if self.use_cnet and cimg is not None: # controlnet fits max 960x640 on 16gb vram
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
@@ -347,11 +370,16 @@ class SDfu:
                     
                     if cfg_scale in [0, 1]:
                         noise_pred = self.unet(lat_in, t, conds, **ukwargs).sample
+                    elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
+                        noises = self.unet(torch.cat([lat_in, ilat], dim=1), t, conds).sample.chunk(bs)
+                        noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
+                        for i in range(len(noises)-2):
+                            noise_pred = noise_pred + (noises[i+2] - noises[1]) * cfg_scale * cws[i % len(cws)] # prompt guidance
                     else:
                         noises = self.unet(lat_in, t, conds, **ukwargs).sample.chunk(bs) # pred noise residual at step t
                         noise_pred = noises[0] # uncond
                         for i in range(len(noises)-1):
-                            noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here
+                            noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # prompt guidance
 
                     lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
                     if verbose and not iscolab: pbar.upd()

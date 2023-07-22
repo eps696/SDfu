@@ -45,7 +45,7 @@ def main():
 
     cdict = {} # for controlnet
     cimgs = []
-    if isset(a, 'control_mod') and os.path.exists(a.control_mod) and isset(a, 'control_img'):
+    if sd.use_cnet and isset(a, 'control_img'):
         assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
         cimgs = img_list(a.control_img) if os.path.isdir(a.control_img) else [a.control_img]
         count = max(count, len(cimgs))
@@ -58,6 +58,7 @@ def main():
             images = sd.generate(z_, c_, uc, **gendict)
         return images
     
+    gendict = {}
     pbar = progbar(count)
     for i in range(count):
         log = texts[i % len(texts)] if len(texts) > 0 else ''
@@ -75,8 +76,11 @@ def main():
                     log += ' / %s' % os.path.basename(masks[i % len(masks)])
                     gendict = sd.prep_mask(masks[i % len(masks)], img_path, init_image)
                     z_ = sd.rnd_z(H, W) if sd.inpaintmod else sd.img_z(init_image)
+                elif isset(a, 'img_scale'): # instruct pix2pix
+                    ilat = sd.img_lat(init_image) / sd.vae.config.scaling_factor
+                    gendict['ilat'] = torch.cat([torch.zeros_like(ilat)] + [ilat] * (csb.shape[1]+1), dim=0) # [unlat, ilat, ilat, ..]
+                    z_ = sd.rnd_z(H, W)
                 else: # standard img2img
-                    gendict = {}
                     z_ = sd.ddim_inv(sd.img_lat(init_image), uc) if a.sampler=='ddim' else sd.img_z(init_image)
 
         else: # txt2img

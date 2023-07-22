@@ -1,7 +1,7 @@
 import argparse
 
 samplers = ['klms', 'uni', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
-models = ['15', '15drm', '2i', '21', '21v', 'vzs', 'vpot'] # !! only 15 and 15drm are uncensored !!
+models = ['15', '15drm', '1p2p', '2i', '21', '21v', 'vzs', 'vpot'] # !! only 15 and 15drm are uncensored !!
 unprompt = ""
 unprompt = "low quality, poorly drawn, out of focus, blurry, tiled, segmented, oversaturated"
 # unprompt += ", letters, text, titles, graffiti, typography, watermarks, writings"
@@ -25,6 +25,7 @@ def main_args():
     parser.add_argument(       '--vae',     default='ema', help='orig, ema, mse')
     parser.add_argument('-C','--cfg_scale', default=7.5, type=float, help="prompt guidance scale")
     parser.add_argument('-f', '--strength', default=0.75, type=float, help="strength of image processing. 0 = preserve img, 1 = replace it completely")
+    parser.add_argument('-if', '--img_scale', default=None, type=float, help='image guidance scale for Instruct pix2pix. None = disabled it')
     parser.add_argument(      '--ddim_eta', default=0., type=float)
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
     parser.add_argument('--precision',      default='autocast')

@@ -13,7 +13,7 @@ Current functions:
 * Text to image
 * Image re- and in-painting
 * Various interpolations (between/upon images or text prompts, smoothed by [latent blending])
-* [ControlNet] guidance for pose, depth & canny edges
+* Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * Text to video with [ZeroScope] and [Potat] models
 
 Fine-tuning with your images:
@@ -43,7 +43,7 @@ pip install xformers
 NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
 
 Run command below to download Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [ZeroScope], [Potat], [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [ControlNet], [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [ZeroScope], [Potat], [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
@@ -87,14 +87,15 @@ Check other options and their shortcuts by running these scripts with `--help` o
 
 There are also Windows bat-files, slightly simplifying and automating the commands. 
 
-## Guide generation with [ControlNet]
+
+## Guide synthesis with [ControlNet] or [Instruct pix2pix]
 
 * Generate an image from existing one, using its depth map as conditioning (extra guiding source):
 ```
 python src/preproc.py -i _in/something.jpg --type depth -o _in/depth
 python src/gen.py --control_mod depth --control_img _in/depth/something.jpg -im _in/something.jpg -t "neon glow steampunk" -f 1
 ```
-One can replace `depth` with `canny` (edges) or `pose` (if there are humans in the source) in the commands above.  
+One can replace `depth` in the commands above with `canny` (edges) or `pose` (if there are humans in the source).  
 Option `-im ...` may be omitted to employ "pure" txt2img method, pushing the result further to the text prompt:
 ```
 python src/preproc.py -i _in/something.jpg --type canny -o _in/canny
@@ -108,6 +109,12 @@ or with pan/zoom recursion:
 ```
 python src/recur.py -cmod canny -cimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02 -m 15drm
 ```
+
+One more way of editing images is [Instruct pix2pix]:
+```
+python src/gen.py -im _in/pix --img_scale 2 -t "turn human to puppet" --model 1p2p
+```
+
 
 ## Fine-tuning
 
@@ -148,7 +155,7 @@ You can also run `python src/latwalk.py ...` with finetuned weights to make anim
 Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
 More radical blending can be achieved with multiguidance technique (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
-## Special models: Kandinsky 2.2
+## Special model: Kandinsky 2.2
 
 Another interesting model is [Kandinsky] 2.2, featuring txt2img, img2img, inpaint and depth-based controlnet methods. Its architecture and pipelines differ from Stable Diffusion, so there's separate script for it. The options are similar to the above (no fine-tuning yet); run `python src/kand.py -h` to see unused ones.  
 NB: The models (heavy!) auto-downloaded on the first use; otherwise download yourself and set their common path with `--models_dir ...` option.  
@@ -157,7 +164,7 @@ As an example, interpolate with ControlNet:
 python src/kand.py -cimg _in/something.jpg -t yourfile.txt --size 1024-512 -fs 5 -cts 0.6
 ```
 
-## Special models: Text to Video
+## Special model: Text to Video
 
 Generate short HD video from a text prompt with [ZeroScope] model:
 ```
@@ -185,6 +192,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [Deforum]: <https://github.com/deforum-art/deforum-stable-diffusion>
 [CLIPseg]: <https://github.com/timojl/clipseg>
 [ControlNet]: <https://github.com/lllyasviel/ControlNet>
+[Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
 [textual inversion]: <https://textual-inversion.github.io>
 [custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
 [LoRA]: <https://github.com/cloneofsimo/lora>
