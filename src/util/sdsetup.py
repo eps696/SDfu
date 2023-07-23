@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers.models import AutoencoderKL
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers import StableDiffusionPipeline
 from diffusers.utils import is_accelerate_available, is_accelerate_version
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
@@ -29,9 +29,9 @@ except: iscolab = False
 
 device = torch.device('cuda')
 
-class SDpipe(DiffusionPipeline):
-    def __init__(self, vae, text_encoder, tokenizer, unet, scheduler):
-        super().__init__()
+class SDpipe(StableDiffusionPipeline):
+    def __init__(self, vae, text_encoder, tokenizer, unet, scheduler, safety_checker=None, feature_extractor=None, requires_safety_checker=False):
+        super().__init__(vae, text_encoder, tokenizer, unet, scheduler, None, None, requires_safety_checker=False)
         self.register_modules(vae=vae, text_encoder=text_encoder, tokenizer=tokenizer, unet=unet, scheduler=scheduler)
 
 class ModelWrapper: # for k-sampling
@@ -73,8 +73,11 @@ class SDfu:
         # load finetuned stuff
         mod_tokens = None
         if isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
-            from .finetune import load_loras
-            mod_tokens = load_loras(torch.load(a.load_lora), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
+            if a.load_lora.endswith('.safetensors'): # downloaded
+                self.pipe.load_lora_weights(a.load_lora)
+            else: # custom, trained here
+                from .finetune import load_loras
+                mod_tokens = load_loras(torch.load(a.load_lora), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
         elif isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
             from .finetune import load_delta, custom_diff
             self.pipe.unet = custom_diff(self.pipe.unet, train=False)
@@ -101,7 +104,8 @@ class SDfu:
         self.final_setup(a)
 
     def load_model_external(self, model_path):
-        self.pipe = DiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16)
+        SDload = StableDiffusionPipeline.from_single_file if os.path.isfile(model_path) else StableDiffusionPipeline.from_pretrained
+        self.pipe = SDload(model_path, torch_dtype=torch.float16, safety_checker=None)
         self.text_encoder = self.pipe.text_encoder
         self.tokenizer    = self.pipe.tokenizer
         self.unet         = self.pipe.unet

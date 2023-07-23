@@ -112,7 +112,7 @@ python src/recur.py -cmod canny -cimg _in/canny/something.jpg -cts 0.5 -t yourfi
 
 One more way of editing images is [Instruct pix2pix]:
 ```
-python src/gen.py -im _in/pix --img_scale 2 -t "turn human to puppet" --model 1p2p
+python src/gen.py -im _in/pix --img_scale 2 -C 9 -t "turn human to puppet" --model 1p2p
 ```
 
 
