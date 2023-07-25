@@ -380,8 +380,9 @@ class LatentBlending():
             lat = lat_start.clone()
             lats_out = []
             
-            if isset(self.sd.a, 'load_lora') and isxf: 
-                cond = [cond[0].float(), cond[1].float(), cond[2]] if isinstance(cond, list) else cond.float() # otherwise q/k/v mistype error !?
+            if isset(self.sd.a, 'load_lora') and isxf: # otherwise q/k/v mistype error
+                cond = [cond[0].float(), cond[1].float(), cond[2]] if isinstance(cond, list) else None if cond is None else cond.float()
+                self.uc = self.uc.float()
 
             for i in range(self.steps):
                 if i < idx_start:
