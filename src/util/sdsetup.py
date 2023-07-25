@@ -250,6 +250,7 @@ class SDfu:
 
     def ddim_inv(self, lat, cond, cimg=None): # ddim inversion, slower, ~exact
         ukwargs = {}
+        if isset(self.a, 'load_lora') and isxf: cond = cond.float() # otherwise q/k/v mistype error
         with self.precision_scope('cuda'):
             for t in reversed(self.scheduler.timesteps):
                 with torch.no_grad():

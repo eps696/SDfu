@@ -82,7 +82,7 @@ python src/latwalk.py -im _in/pix --cfg_scale 0 -f 1
 ```
 Interpolations can be made smoother (and faster) by adding `--latblend X` option ([latent blending] technique, X in range 0~1). 
 If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
-Models can be selected with `--model` option by either a shortcut (15, 15drm, 21, 21v), a path on the [Hugging Face] website (e.g. `SG161222/Realistic_Vision_V2.0`; 5gb will be auto-downloaded for further use) or a local path to the already downloaded file set.  
+Models can be selected with `--model` option by either a shortcut (15, 15drm, 21, 21v), a path on the [Hugging Face] website (e.g. `SG161222/Realistic_Vision_V2.0`, it will be auto-downloaded for further use) or a local path to the downloaded file set (or `safetensors` file).  
 Check other options and their shortcuts by running these scripts with `--help` option.  
 
 There are also Windows bat-files, slightly simplifying and automating the commands. 
