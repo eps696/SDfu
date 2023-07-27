@@ -16,6 +16,12 @@ from .txt2mask import Txt2Mask
 
 device = torch.device('cuda')
 
+try: # notebook/colab
+    get_ipython().__class__.__name__
+    maybe_colab = True
+except: # normal console
+    maybe_colab = False
+
 def gpu_ram():
     return torch.cuda.get_device_properties(0).total_memory // (1024*1024*1023)
 
@@ -38,10 +44,11 @@ def isset(a, *itms): # all exist, not None, not False, len > 0
     return all(oks)
 
 def cvshow(img, name='t'):
-    if torch.is_tensor(img):
-        img = torch.clip((img+1)*127.5, 0, 255).cpu().numpy().astype(np.uint8)
-    cv2.imshow(name, img[:,:,::-1])
-    cv2.waitKey(1)
+    if not maybe_colab:
+        if torch.is_tensor(img):
+            img = torch.clip((img+1)*127.5, 0, 255).cpu().numpy().astype(np.uint8)
+        cv2.imshow(name, img[:,:,::-1])
+        cv2.waitKey(1)
 
 def calc_size(size, model, verbose=True, quant=8):
     if size.lower() == 'max':
@@ -460,11 +467,7 @@ class ProgressBar(object):
         if newline is True:
             sys.stdout.write('\n\n')
 
-try: # progress bar for notebooks 
-    get_ipython().__class__.__name__
-    progbar = ProgressIPy
-except: # normal console
-    progbar = ProgressBar
+progbar = ProgressIPy if maybe_colab else ProgressBar
 
 def time_days(sec):
     return '%dd %d:%02d:%02d' % (sec/86400, (sec/3600)%24, (sec/60)%60, sec%60)
