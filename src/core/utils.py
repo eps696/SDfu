@@ -132,11 +132,11 @@ def save_img(image, num, out_dir, prefix='', filepath=None):
 
 def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, tensor=True, model_path='models/clipseg/rd64-uni.pth'):
     if os.path.isfile(mask_str): 
-        mask = load_img(mask_str, tensor=False)
+        mask, _ = load_img(mask_str, tensor=False)
         mask = ImageOps.invert(mask.convert('L'))
     else: 
         if isinstance(image, str):
-            image = load_img(image, tensor=False)
+            image, _ = load_img(image, tensor=False)
         txt2mask = Txt2Mask(model_path, device='cuda')
         mask = txt2mask.segment(image, mask_str).to_mask(float(threshold))
         # image.putalpha(mask)
