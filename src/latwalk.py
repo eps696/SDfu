@@ -4,10 +4,10 @@ import pickle
 
 import torch
 
-from util.sdsetup import SDfu
-from util.args import main_args, unprompt
-from util.text import multiprompt
-from util.utils import load_img, save_img, slerp, lerp, blend, calc_size, isset, read_latents, img_list, basename, progbar, cvshow, save_cfg
+from core.sdsetup import SDfu
+from core.args import main_args, unprompt
+from core.text import multiprompt
+from core.utils import load_img, save_img, slerp, lerp, blend, calc_size, isset, read_latents, img_list, basename, progbar, cvshow, save_cfg
 
 samplers = ['klms', 'euler', 'ddim', 'pndm']
 
@@ -42,7 +42,7 @@ def main():
     gendict = {}
 
     if a.latblend > 0:
-        from util.latblend import LatentBlending
+        from core.latblend import LatentBlending
         lb = LatentBlending(sd, a.steps, a.cfg_scale)
         img_count = 0
 

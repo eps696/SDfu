@@ -18,8 +18,8 @@ transformers.utils.logging.set_verbosity_warning()
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import StableDiffusionPipeline, AutoencoderKL, UNet2DConditionModel, DDIMScheduler
 
-from util.finetune import FinetuneDataset, custom_diff, prep_lora, save_delta, load_delta, save_lora, load_loras, save_embeds
-from util.utils import save_img, save_cfg, isset, progbar
+from core.finetune import FinetuneDataset, custom_diff, prep_lora, save_delta, load_delta, save_lora, load_loras, save_embeds
+from core.utils import save_img, save_cfg, isset, progbar
 
 import warnings
 warnings.filterwarnings("ignore")

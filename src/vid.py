@@ -11,10 +11,10 @@ warnings.filterwarnings("ignore")
 import torch
 import torch.nn.functional as F
 
-from util.sdsetup import SDfu
-from util.args import main_args, samplers, unprompt
-from util.text import multiprompt
-from util.utils import file_list, basename, progbar, save_cfg
+from core.sdsetup import SDfu
+from core.args import main_args, samplers, unprompt
+from core.text import multiprompt
+from core.utils import file_list, basename, progbar, save_cfg
 
 def get_args(parser):
     parser.add_argument('-iv', '--in_vid',  default=None, help='input image or directory with images (overrides width and height)')

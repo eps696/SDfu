@@ -5,10 +5,10 @@ os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
 import torch
 from torchvision import transforms as T
 
-from util.sdsetup import SDfu
-from util.args import main_args, unprompt
-from util.text import multiprompt
-from util.utils import load_img, save_img, lerp, triblur, calc_size, isset, basename, progbar, cvshow, save_cfg, latent_anima
+from core.sdsetup import SDfu
+from core.args import main_args, unprompt
+from core.text import multiprompt
+from core.utils import load_img, save_img, lerp, triblur, calc_size, isset, basename, progbar, cvshow, save_cfg, latent_anima
 
 def get_args(parser):
     # override
@@ -65,7 +65,7 @@ def main():
     count = len(csb)
 
     if a.latblend > 0 or a.interstep > 0:
-        from util.latblend import LatentBlending
+        from core.latblend import LatentBlending
         lb = LatentBlending(sd, a.steps, a.cfg_scale, a.strength, verbose=False)
 
     if isset(a, 'in_img') and os.path.isfile(a.in_img):

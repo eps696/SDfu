@@ -4,10 +4,10 @@ os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
 
 import torch
 
-from util.sdsetup import SDfu
-from util.args import main_args, samplers, unprompt
-from util.text import read_txt, multiprompt
-from util.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar, save_cfg
+from core.sdsetup import SDfu
+from core.args import main_args, samplers, unprompt
+from core.text import read_txt, multiprompt
+from core.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar, save_cfg
 
 def get_args(parser):
     # override

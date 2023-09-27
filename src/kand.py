@@ -9,9 +9,9 @@ import torch
 
 from diffusers import DiffusionPipeline
 
-from util.args import main_args
-from util.text import read_txt, txt_clean
-from util.utils import load_img, makemask, blend, cvshow, calc_size, isok, isset, img_list, basename, progbar, save_cfg
+from core.args import main_args
+from core.text import read_txt, txt_clean
+from core.utils import load_img, makemask, blend, cvshow, calc_size, isok, isset, img_list, basename, progbar, save_cfg
 
 def get_args(parser):
     parser.add_argument('-mdir', '--models_dir', default=None)

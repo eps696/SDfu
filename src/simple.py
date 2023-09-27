@@ -12,8 +12,8 @@ from diffusers.schedulers import DDIMScheduler, PNDMScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 
-from util.text import txt_clean, read_txt
-from util.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar
+from core.text import txt_clean, read_txt
+from core.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar
 
 def get_args():
     parser = argparse.ArgumentParser()

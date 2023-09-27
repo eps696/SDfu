@@ -5,7 +5,7 @@ from imageio import imread, imsave
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'xtra'))
 from annotator.util import resize_image
-from util.utils import img_list, basename, progbar
+from core.utils import img_list, basename, progbar
 
 methods = ['canny', 'depth', 'pose']
 
