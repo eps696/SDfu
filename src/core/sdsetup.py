@@ -243,9 +243,11 @@ class SDfu:
         next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
         return next_sample
 
-    def img_lat(self, image):
+    def img_lat(self, image, deterministic=False):
         if self.use_half: image = image.half()
-        lats = self.vae.encode(image).latent_dist.sample() * self.vae.config.scaling_factor
+        postr = self.vae.encode(image).latent_dist
+        lats = postr.mean if deterministic else postr.sample()
+        lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
 
     def ddim_inv(self, lat, cond, cimg=None): # ddim inversion, slower, ~exact

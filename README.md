@@ -110,10 +110,19 @@ or with pan/zoom recursion:
 python src/recur.py -cmod canny -cimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02 -m 15drm
 ```
 
-One more way of editing images is [Instruct pix2pix]:
+### More ways to edit images 
+
+[Instruct pix2pix]:
 ```
 python src/gen.py -im _in/pix --img_scale 2 -C 9 -t "turn human to puppet" --model 1p2p
 ```
+
+[TokenFlow] (temporally stable!):
+```
+python src/tokenflow.py -im _in/yoursequence -t "rusty metallic sculpture" --batch_size 4 --batch_pivot --cpu
+```
+TokenFlow employs either `pnp` or `sde` method and can be used with various models & ControlNet options. 
+*NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume unlimited sequences by design. Pivots batching & CPU offloading (introduced in this repo) allowed higher limits, however they still exist. As an example, I managed to process 200+ frames of 960x540 on a 3090 GPU in batches of 5 without OOM (or without going to the 10x slower shared RAM with new Nvidia drivers).*
 
 
 ## Fine-tuning
@@ -193,6 +202,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [CLIPseg]: <https://github.com/timojl/clipseg>
 [ControlNet]: <https://github.com/lllyasviel/ControlNet>
 [Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
+[TokenFlow]: <https://github.com/omerbt/TokenFlow>
 [textual inversion]: <https://textual-inversion.github.io>
 [custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
 [LoRA]: <https://github.com/cloneofsimo/lora>
