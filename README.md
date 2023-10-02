@@ -14,6 +14,7 @@ Current functions:
 * Image re- and in-painting
 * Various interpolations (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
+* Smooth & stable video edit with [TokenFlow]
 * Text to video with [ZeroScope] and [Potat] models
 
 Fine-tuning with your images:
