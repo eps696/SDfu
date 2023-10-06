@@ -165,13 +165,24 @@ You can also run `python src/latwalk.py ...` with finetuned weights to make anim
 Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
 More radical blending can be achieved with multiguidance technique, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
-## Special model: Kandinsky 2.2
+## Special model: SDXL
 
-Another interesting model is [Kandinsky] 2.2, featuring txt2img, img2img, inpaint and depth-based controlnet methods. Its architecture and pipelines differ from Stable Diffusion, so there's a separate script for it (simply calling those pipelines). The options are similar to the above (no fine-tuning yet); run `python src/kand.py -h` to see unused ones.  
-NB: The models (heavy!) auto-downloaded on the first use; otherwise download yourself and set their common path with `--models_dir ...` option.  
+For now, SDXL is not fully integrated into SDfu core, so there's a separate script, basically wrapping existing `diffusers` pipelines.  
+Supported features: txt2img, img2img, inpaint, depth/canny controlnet, text interpolations, dual prompts (native for SDXL).  
+Unsupported (yet): latent blending, multi guidance, fine-tuning, weighted prompts.  
+NB: The models (~8gb total) are auto-downloaded on the first use; you may download them yourself and set the path with `--models_dir ...` option.  
 As an example, interpolate with ControlNet:
 ```
-python src/kand.py -cimg _in/something.jpg -t yourfile.txt --size 1024-512 -fs 5 -cts 0.6
+python src/sdxl.py -v -t yourfile.txt -cimg _in/something.jpg -cmod depth -cts 0.6 --size 1280-768 -fs 5
+```
+
+## Special model: Kandinsky 2.2
+
+Another interesting model is [Kandinsky] 2.2, featuring txt2img, img2img, inpaint, depth-based controlnet and simple interpolations. Its architecture and pipelines differ from Stable Diffusion, so there's also a separate script for it, wrapping those pipelines. The options are similar to the above; run `python src/kand.py -h` to see unused ones. It also consumes only unweighted prompts (no brackets, etc).  
+NB: The models (heavy!) are auto-downloaded on the first use; you may download them yourself and set the path with `--models_dir ...` option.  
+As an example, interpolate with ControlNet:
+```
+python src/kand.py -v -t yourfile.txt -cimg _in/something.jpg -cts 0.6 --size 1280-720 -fs 5
 ```
 
 ## Special model: Text to Video
