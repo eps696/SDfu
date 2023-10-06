@@ -14,17 +14,17 @@ Current functions:
 * Image re- and in-painting
 * Various interpolations (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
-* Smooth & stable video edit with [TokenFlow]
+* **Smooth & stable video edit** with [TokenFlow]
 * Text to video with [ZeroScope] and [Potat] models
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
 * Add subject (new token + Unet delta) with [custom diffusion]
-* Add subject (new token + Unet delta) with [LoRA]
+* Add subject (new token + Unet delta) with [LoRA] (custom implementation)
 
 Other features:
 * Memory efficient with `xformers` (hi res on 6gb VRAM GPU)
-* Multi guidance technique for better interpolations
+* **Multi guidance** technique for better interpolations
 * Use of special models: inpainting, SD v2, [Kandinsky]
 * Masking with text via [CLIPseg]
 * Weighted multi-prompts (with brackets or numerical weights)
@@ -32,7 +32,7 @@ Other features:
 
 ## Setup
 
-Install CUDA 11.8 if you're in Windows (seems not necessary on Linux with Conda).  
+Install CUDA 11.8 if you're on Windows (seems not necessary on Linux with Conda).  
 Setup the Conda environment:
 ```
 conda create -n SD python=3.10 numpy pillow 
@@ -61,7 +61,7 @@ python src/gen.py --in_txt "hello world" --size 1024-576
 ```
 python src/gen.py --in_img _in/pix -t "neon light glow" --strength 0.7
 ```
-* Inpaint directory of images with RunwayML model, turning humans into robots:
+* Inpaint directory of images with inpainting model, turning humans into robots:
 ```
 python src/gen.py -im _in/pix --mask "human, person" -t "steampunk robot" --model 2i
 ```
@@ -83,10 +83,10 @@ python src/latwalk.py -im _in/pix --cfg_scale 0 -f 1
 ```
 Interpolations can be made smoother (and faster) by adding `--latblend X` option ([latent blending] technique, X in range 0~1). 
 If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
-Models can be selected with `--model` option by either a shortcut (15, 15drm, 21, 21v), a path on the [Hugging Face] website (e.g. `SG161222/Realistic_Vision_V2.0`, it will be auto-downloaded for further use) or a local path to the downloaded file set (or `safetensors` file).  
+Models can be selected with `--model` option by either a shortcut (15, 15drm, 21, 21v, ..), a path on the [Hugging Face] website (e.g. `SG161222/Realistic_Vision_V2.0`, would be auto-downloaded for further use) or a local path to the downloaded file set (or `safetensors` file).  
 Check other options and their shortcuts by running these scripts with `--help` option.  
 
-There are also Windows bat-files, slightly simplifying and automating the commands. 
+There are also few Windows bat-files, slightly simplifying and automating the commands. 
 
 
 ## Guide synthesis with [ControlNet] or [Instruct pix2pix]
@@ -106,7 +106,7 @@ ControlNet options can be used for interpolations as well (fancy making videomap
 ```
 python src/latwalk.py --control_mod canny --control_img _in/canny/something.jpg --control_scale 0.5 -t yourfile.txt --size 1024-512 --fstep 5
 ```
-or with pan/zoom recursion:
+also with pan/zoom recursion:
 ```
 python src/recur.py -cmod canny -cimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02 -m 15drm
 ```
@@ -122,8 +122,8 @@ python src/gen.py -im _in/pix --img_scale 2 -C 9 -t "turn human to puppet" --mod
 ```
 python src/tokenflow.py -im _in/yoursequence -t "rusty metallic sculpture" --batch_size 4 --batch_pivot --cpu
 ```
-TokenFlow employs either `pnp` or `sde` method and can be used with various models & ControlNet options. 
-*NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume unlimited sequences by design. Pivots batching & CPU offloading (introduced in this repo) allowed higher limits, however they still exist. As an example, I managed to process 200+ frames of 960x540 on a 3090 GPU in batches of 5 without OOM (or without going to the 10x slower shared RAM with new Nvidia drivers).*
+TokenFlow employs either `pnp` or `sde` method and can be used with various models & ControlNet options.  
+*NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume unlimited sequences by design. Pivots batching & CPU offloading (introduced in this repo) pushed the limits, yet hasn't removed them. As an example, I managed to process 300+ frames of 960x540 on a 3090 GPU in batches of 5 without OOM (or without going to the 10x slower shared RAM with new Nvidia drivers).*
 
 
 ## Fine-tuning
@@ -132,7 +132,7 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.001 --type text
 ```
-* Finetune the model (namely, part of the Unet attention layers) with [LoRA]:
+* Finetune the model (namely, part of the Unet attention layers) with [LoRA] *(incompatible with `diffusers` standard!)*:
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.0001 --type lora
 ```
@@ -163,11 +163,11 @@ python src/gen.py -t "cosmic <mycat1> beast" --load_token mycat1-text.pt
 You can also run `python src/latwalk.py ...` with finetuned weights to make animations.
 
 Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
-More radical blending can be achieved with multiguidance technique (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
+More radical blending can be achieved with multiguidance technique, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
 ## Special model: Kandinsky 2.2
 
-Another interesting model is [Kandinsky] 2.2, featuring txt2img, img2img, inpaint and depth-based controlnet methods. Its architecture and pipelines differ from Stable Diffusion, so there's separate script for it. The options are similar to the above (no fine-tuning yet); run `python src/kand.py -h` to see unused ones.  
+Another interesting model is [Kandinsky] 2.2, featuring txt2img, img2img, inpaint and depth-based controlnet methods. Its architecture and pipelines differ from Stable Diffusion, so there's a separate script for it (simply calling those pipelines). The options are similar to the above (no fine-tuning yet); run `python src/kand.py -h` to see unused ones.  
 NB: The models (heavy!) auto-downloaded on the first use; otherwise download yourself and set their common path with `--models_dir ...` option.  
 As an example, interpolate with ControlNet:
 ```
