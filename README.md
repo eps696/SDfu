@@ -12,7 +12,7 @@ There is also a [similar repo](https://github.com/eps696/SD) (kinda obsolete now
 Current functions:
 * Text to image
 * Image re- and in-painting
-* Various interpolations (between/upon images or text prompts, smoothed by [latent blending])
+* **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * **Smooth & stable video edit** with [TokenFlow]
 * Text to video with [ZeroScope] and [Potat] models
@@ -123,7 +123,7 @@ python src/gen.py -im _in/pix --img_scale 2 -C 9 -t "turn human to puppet" --mod
 python src/tokenflow.py -im _in/yoursequence -t "rusty metallic sculpture" --batch_size 4 --batch_pivot --cpu
 ```
 TokenFlow employs either `pnp` or `sde` method and can be used with various models & ControlNet options.  
-*NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume unlimited sequences by design. Pivots batching & CPU offloading (introduced in this repo) pushed the limits, yet hasn't removed them. As an example, I managed to process 300+ frames of 960x540 on a 3090 GPU in batches of 5 without OOM (or without going to the 10x slower shared RAM with new Nvidia drivers).*
+*NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume long sequences by design. Pivots batching & CPU offloading (introduced in this repo) pushed the limits, yet didn't removed them. As an example, I managed to process only 300+ frames of 960x540 on a 3090 GPU in batches of 5 without OOM (or without going to the 10x slower shared RAM with new Nvidia drivers).*
 
 
 ## Fine-tuning
