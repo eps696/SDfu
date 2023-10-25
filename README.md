@@ -25,7 +25,7 @@ Fine-tuning with your images:
 Other features:
 * Memory efficient with `xformers` (hi res on 6gb VRAM GPU)
 * **Multi guidance** technique for better interpolations
-* Use of special models: inpainting, SD v2, [Kandinsky]
+* Use of special models: inpainting, SD v2, SDXL, [Kandinsky]
 * Masking with text via [CLIPseg]
 * Weighted multi-prompts (with brackets or numerical weights)
 * to be continued..  
@@ -167,8 +167,8 @@ More radical blending can be achieved with multiguidance technique, introduced h
 
 ## Special model: SDXL
 
-For now, SDXL is not fully integrated into SDfu core, so there's a separate script, basically wrapping existing `diffusers` pipelines.  
-Supported features: txt2img, img2img, inpaint, depth/canny controlnet, text interpolations, dual prompts (native for SDXL).  
+SDXL is not integrated into SDfu core yet, for now it's a separate script, wrapping existing `diffusers` pipelines.  
+Supported features: txt2img, img2img, inpaint, depth/canny controlnet, text interpolations, dual prompts (native).  
 Unsupported (yet): latent blending, multi guidance, fine-tuning, weighted prompts.  
 NB: The models (~8gb total) are auto-downloaded on the first use; you may download them yourself and set the path with `--models_dir ...` option.  
 As an example, interpolate with ControlNet:

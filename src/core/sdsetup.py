@@ -201,7 +201,7 @@ class SDfu:
             depth_path = os.path.join(a.maindir, self.subdir, 'depth')
             self.depth_estimator = DPTForDepthEstimation.from_pretrained(depth_path, torch_dtype=torch.float16).to(device)
             self.feat_extractor  = DPTImageProcessor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
-        if isset(a, 'img_scale'): # instruct pix2pix
+        if isset(a, 'img_scale') and a.img_scale > 0: # instruct pix2pix
             assert not (self.use_cnet or a.cfg_scale in [0,1]), "Use either Instruct-pix2pix or Controlnet guidance"
             a.strength = 1.
 

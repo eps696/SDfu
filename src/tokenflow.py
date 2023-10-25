@@ -318,7 +318,10 @@ def main():
         if isset(a, 'in_txt'):
             edit(sd, lats, cnet_conds, a)
 
-        save_video(os.path.join(a.out_dir, 'out'), fps=8)
+        try:
+            save_video(os.path.join(a.out_dir, 'out'), fps=8)
+        except:
+            print("Cannot export video (pyav not installed?), exiting")
 
 
 if __name__ == '__main__':
