@@ -15,7 +15,7 @@ Current functions:
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * **Smooth & stable video edit** with [TokenFlow]
-* Text to video with [ZeroScope] and [Potat] models
+* Text to video with [AnimateDiff] and [ZeroScope] models
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
@@ -43,8 +43,8 @@ pip install xformers
 ```
 NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
 
-Run command below to download Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [ZeroScope], [Potat], [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
+[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [ZeroScope], [AnimateDiff], [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
@@ -187,7 +187,7 @@ python src/kand.py -v -t yourfile.txt -cimg _in/something.jpg -cts 0.6 --size 12
 
 ## Special model: Text to Video
 
-Generate short HD video from a text prompt with [ZeroScope] model:
+Generate short video from a text prompt with [ZeroScope] model:
 ```
 python src/vid.py -t "dragon in a China shop" --model vzs
 ```
@@ -197,6 +197,15 @@ python src/vid.py -t "combat in the dancehall" --in_vid yourvideo.mp4 --model vz
 ```
 Longer input video would be cut in short pieces and processed one by one. It may be better to process only in hi-res (omitting `--model ...` option).  
 NB: the models are limited to rather mundane stuff, don't expect any notable level of abstraction or fantasy here.
+
+Generate very short video from a text prompt with [AnimateDiff] motion adapter (one can combine it with any base SD model):
+```
+python src/anima.py -t "dragon in a China shop" -m 15drm
+```
+Process existing video with [AnimateDiff] motion adapter:
+```
+python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -m 15drm
+```
 
 
 ## Credits
@@ -220,5 +229,6 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [LoRA]: <https://github.com/cloneofsimo/lora>
 [latent blending]: <https://github.com/lunarring/latentblending>
 [Kandinsky]: <https://huggingface.co/kandinsky-community>
+[AnimateDiff]: <https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2>
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>
 [Potat]: <https://huggingface.co/camenduru/potat1>

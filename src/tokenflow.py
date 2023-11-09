@@ -21,7 +21,7 @@ device = torch.device('cuda')
 def get_args(parser):
     parser.add_argument(       '--edit_type', default='pnp', choices=['pnp', 'sde'])
     parser.add_argument('-st', '--src_txt', default='')
-    parser.add_argument('-max','--max_len', default=1000, type=int)
+    parser.add_argument('-max','--max_len', default=300, type=int)
     parser.add_argument('-bs', '--batch_size', default=None, type=int, help="Batch size (different from main SDfu!)")
     parser.add_argument('-bp', '--batch_pivot', action='store_true', help='Do pivots in batches? Recommended to fit longer sequences')
     parser.add_argument(       '--cpu', action='store_true', help='Unload registers on CPU? Recommended to fit bigger/longer sequences')

@@ -101,6 +101,17 @@ class SDfu:
             if a.verbose: print(' loaded ControlNet', a.control_mod)
         self.use_cnet = hasattr(self, 'cnet')
 
+        # load animatediff
+        if isset(a, 'animdiff'):
+            if not os.path.exists(a.animdiff): a.animdiff = os.path.join(a.maindir, 'anima')
+            assert os.path.exists(a.animdiff), "Not found AnimateDiff model %s" % a.animdiff
+            from diffusers.models import UNetMotionModel
+            from diffusers.models.unet_motion_model import MotionAdapter
+            motion_adapter = MotionAdapter.from_pretrained(a.animdiff)
+            self.unet = UNetMotionModel.from_unet2d(self.unet, motion_adapter)
+            if not self.a.lowmem: self.unet.to(device)
+            self.pipe.register_modules(unet = self.unet, motion_adapter = motion_adapter)
+
         self.final_setup(a)
 
     def load_model_external(self, model_path):
@@ -148,7 +159,8 @@ class SDfu:
                 vae_path = 'vae-ft-mse' if a.vae=='mse' else 'vae-ft-ema'
             vae_path = os.path.join(a.maindir, self.subdir, vae_path)
             vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16)
-        if vidtype or not isxf: vae.enable_slicing()
+        if a.lowmem: vae.enable_tiling() # higher res, more free ram
+        elif vidtype or isset(a, 'animdiff') or not isxf: vae.enable_slicing()
         self.vae = vae
 
         if scheduler is None:

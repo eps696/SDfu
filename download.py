@@ -43,17 +43,20 @@ def main():
     # print(' downloading SD 2-depth model Unet & depth')
     # get_model("https://www.dropbox.com/s/4visx4qcscirvob/sdfu-v2d-unet-fp16.zip?dl=1", 'models/v2')
 
-    print(' downloading SD video models Unet')
+    print(' downloading Zeroscope model Unet')
     get_model("https://www.dropbox.com/s/uyaidznqjaot7hw/sdfu-video-unet-fp16.zip?dl=1", 'models/v2')
 
-    print(' downloading SD 1.x extra VAE models')
-    get_model("https://www.dropbox.com/s/z9uycihl6tybx9y/sdfu-v1-vaes-fp16.zip?dl=1", 'models/v1')
+    print(' downloading AnimateDiff motion model')
+    get_model("https://www.dropbox.com/s/l49n8tt615ibmjm/sdfu-animatediff.zip?dl=1", 'models')
 
     print(' downloading ControlNet models')
     get_model("https://www.dropbox.com/s/qhe1zpbubjr3t75/sdfu-controlnet.zip?dl=1", 'models')
 
     print(' downloading Instruct pix2pix Unet')
     get_model("https://www.dropbox.com/s/n1z21ds5eauzk4m/sdfu-ip2p-unet-fp16.zip?dl=1", 'models/v1')
+
+    print(' downloading SD 1.x extra VAE models')
+    get_model("https://www.dropbox.com/s/z9uycihl6tybx9y/sdfu-v1-vaes-fp16.zip?dl=1", 'models/v1')
 
     print(' downloading CLIPseg model')
     get_model("https://www.dropbox.com/s/c0tduhr4g0al1cq/rd64-uni.pth?dl=1", 'models/clipseg', unzip=False)
