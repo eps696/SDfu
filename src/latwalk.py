@@ -38,7 +38,7 @@ def main():
     if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
     if a.verbose: save_cfg(a, a.out_dir)
 
-    size = None if a.size is None else calc_size(a.size, a.model, a.verbose) 
+    size = None if a.size is None else calc_size(a.size)
     gendict = {}
 
     if a.latblend > 0:

@@ -74,7 +74,7 @@ def main():
     def get_model(name, dir=a.models_dir):
         return 'kandinsky-community/' + name if dir is None or not os.path.exists(dir) else os.path.join(dir, name)
 
-    size = None if not isset(a, 'size') else calc_size(a.size, None, quant=64)
+    size = None if not isset(a, 'size') else calc_size(a.size, quant=64)
     os.makedirs(a.out_dir, exist_ok=True)
     if a.verbose: save_cfg(a, a.out_dir)
     if a.verbose: print(' kandinsky ..', a.cfg_scale, '..', a.strength, '..', a.seed)

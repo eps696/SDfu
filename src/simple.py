@@ -149,7 +149,7 @@ def main():
 
         else: # txt2img
             file_out = '%s-m%s-%s-%d' % (txt_clean(prompt)[:88], a.model, a.sampler, a.seed)
-            W, H = [a.res]*2 if a.size is None else calc_size(a.size, a.model)
+            W, H = [a.res]*2 if a.size is None else calc_size(a.size)
             z_ = rnd_z(H, W)
 
         images = generate(z_, c_)

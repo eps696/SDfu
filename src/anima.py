@@ -55,11 +55,12 @@ def main():
                 subframes = frames[i*a.frames : (i+1)*a.frames]
                 video = torch.from_numpy(np.stack(subframes)).permute(0,3,1,2) # [f,c,h,w]
                 videoin += [video / 127.5 - 1.]
-        H, W = video.shape[-2:]
         name = basename(a.in_vid)
+        if not isset(a, 'size'): a.size = list(video.shape[:-3:-1]) # last 2 reverted
     else:
-        W, H = (sd.res, sd.res) if not isset(a, 'size') else calc_size(a.size, a.model, a.verbose)
         name = basename(a.in_txt) if os.path.exists(a.in_txt) else txt_clean(a.in_txt)
+        if not isset(a, 'size'): a.size = [sd.res]
+    W, H = calc_size(a.size)
 
     outdir = os.path.join(a.out_dir, '%s-%d' % (name, sd.seed))
     os.makedirs(outdir, exist_ok=True)

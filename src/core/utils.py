@@ -50,15 +50,8 @@ def cvshow(img, name='t'):
         cv2.imshow(name, img[:,:,::-1])
         cv2.waitKey(1)
 
-def calc_size(size, model, verbose=True, quant=8):
-    if size.lower() == 'max':
-        gpuram = gpu_ram()
-        if model[-1]=='v':
-            size = '768' if gpuram < 12 else '928-768'
-        else:
-            size = '512-448' if gpuram < 8 else '704-512' if gpuram < 10 else '896-512' if gpuram < 12 else '1024-576'
-        if verbose: print('GPU RAM', gpuram, 'resolution', size)
-    size = [int(s) for s in size.split('-')]
+def calc_size(size, quant=8):
+    if isinstance(size, str): size = [int(s) for s in size.split('-')]
     if len(size)==1: size = size * 2
     w, h = map(lambda x: x - x % quant, size)  # resize to integer multiple of 8
     return w, h

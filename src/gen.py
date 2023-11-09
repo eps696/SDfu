@@ -29,7 +29,7 @@ def main():
     os.makedirs(a.out_dir, exist_ok=True)
     if a.verbose: save_cfg(a, a.out_dir)
 
-    size = None if not isset(a, 'size') else calc_size(a.size, a.model, a.verbose) 
+    size = None if not isset(a, 'size') else calc_size(a.size)
     if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
 
     csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]

@@ -53,7 +53,7 @@ def main():
 
     a.model = basename(a.model)
     a.seed = sd.seed
-    size = None if not isset(a, 'size') else calc_size(a.size, a.model, a.verbose) 
+    size = None if not isset(a, 'size') else calc_size(a.size)
     a.unprompt = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
     os.makedirs(a.out_dir, exist_ok=True)
     if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
