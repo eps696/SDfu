@@ -16,6 +16,7 @@ Current functions:
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * **Smooth & stable video edit** with [TokenFlow]
 * Text to video with [AnimateDiff] and [ZeroScope] models
+* Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
@@ -44,7 +45,7 @@ pip install xformers
 NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
 
 Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [ZeroScope], [AnimateDiff], [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff], [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
@@ -185,6 +186,16 @@ As an example, interpolate with ControlNet:
 python src/kand.py -v -t yourfile.txt -cimg _in/something.jpg -cts 0.6 --size 1280-720 -fs 5
 ```
 
+## Special model: LCM
+
+One of the most impressive recent discoveries is a Latent Consistency Model ([LCM]) architecture. It replaces regular diffusion part by a more direct latent prediction with distilled model, and requires only 2~4 steps to run.  
+Example of usage:
+```
+python src/gen.py -m lcm -t "hello world"
+python src/gen.py -m lcm -im _in/pix -t "neon light glow" -f 0.4
+```
+
+
 ## Special model: Text to Video
 
 Generate short video from a text prompt with [ZeroScope] model:
@@ -204,7 +215,7 @@ python src/anima.py -t "dragon in a China shop" -m 15drm
 ```
 Process existing video with [AnimateDiff] motion adapter:
 ```
-python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -m 15drm
+python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -f 0.7 -m 15drm
 ```
 
 
@@ -228,6 +239,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
 [LoRA]: <https://github.com/cloneofsimo/lora>
 [latent blending]: <https://github.com/lunarring/latentblending>
+[LCM]: <https://latent-consistency-models.github.io>
 [Kandinsky]: <https://huggingface.co/kandinsky-community>
 [AnimateDiff]: <https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2>
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>

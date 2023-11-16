@@ -1,7 +1,7 @@
 import argparse
 
 samplers = ['klms', 'uni', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
-models = ['15', '15drm', '1p2p', '2i', '21', '21v', 'vzs', 'vpot'] # !! only 15 and 15drm are uncensored !!
+models = ['lcm', '15', '15drm', '1p2p', '2i', '21', '21v', 'vzs', 'vpot'] # lcm, 15, 15drm are uncensored
 unprompt = ""
 unprompt = "low quality, poorly drawn, out of focus, blurry, tiled, segmented, oversaturated"
 # unprompt += ", letters, text, titles, graffiti, typography, watermarks, writings"

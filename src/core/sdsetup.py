@@ -63,8 +63,14 @@ class SDfu:
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
 
+        if a.model.lower() == 'lcm':
+            a.model = os.path.join(a.maindir, 'lcm')
+            self.a.sampler = 'lcm'
+            if self.a.cfg_scale > 3: self.a.cfg_scale = 2
+            if self.a.steps > 8: self.a.steps = 4
+
         if a.model in models:
-            self.load_model_custom(a, vae, text_encoder, tokenizer, unet, scheduler)
+            self.load_model_custom(self.a, vae, text_encoder, tokenizer, unet, scheduler)
         else: # downloaded or url
             self.load_model_external(a.model)
         self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
@@ -237,13 +243,18 @@ class SDfu:
         self.g_ = torch.Generator("cuda").manual_seed(self.seed)
     
     def set_steps(self, steps, strength=1., warmup=1, device=device):
-        self.scheduler.set_timesteps(steps, device=device)
-        steps = min(int(steps * strength), steps) # t_enc .. 37
-        if self.use_kdiff:
-            self.sigmas = self.scheduler.sigmas[-steps - warmup :]
-        else:
-            self.timesteps = self.scheduler.timesteps[-steps - warmup :]
+        if self.a.sampler == 'lcm':
+            self.scheduler.set_timesteps(steps, device, strength=strength)
+            self.timesteps = self.scheduler.timesteps
             self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
+        else:
+            self.scheduler.set_timesteps(steps, device=device)
+            steps = min(int(steps * strength), steps) # t_enc .. 50
+            if self.use_kdiff:
+                self.sigmas = self.scheduler.sigmas[-steps - warmup :]
+            else:
+                self.timesteps = self.scheduler.timesteps[-steps - warmup :] # 1 warmup step
+                self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
 
     def next_step_ddim(self, noise, t, sample):
         t, next_t = min(t - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), t
@@ -325,15 +336,14 @@ class SDfu:
             conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if isset(self.a, 'load_lora') and isxf: conds = conds.float() # otherwise q/k/v mistype error
             bs = len(conds) // self.a.batch
-            if cimg is not None:
-                cimg = cimg.repeat_interleave(len(conds) // len(cimg), 0)
-            if ilat is not None: 
-                ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
-            ukwargs = {} # kwargs placeholder for controlnet
+            if cimg is not None: cimg = cimg.repeat_interleave(len(conds) // len(cimg), 0)
+            if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
+            if self.a.sampler == 'lcm': # lcm scheduler requires reset on every generation
+                self.set_steps(self.a.steps, self.a.strength)
 
             if self.use_kdiff:
                 def model_fn(x, t):
-                    ukwargs = {} # kwargs placeholder for controlnet
+                    ukwargs = {} # kwargs placeholder for unet
                     if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
                         x = torch.cat([x, 1.-mask, masked_lat], dim=1)
                     elif isok(depth) and self.depthmod: # depth model
@@ -368,6 +378,7 @@ class SDfu:
             else:
                 if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
                 for t in self.timesteps[offset:]:
+                    ukwargs = {} # kwargs placeholder for unet
                     lat_in = self.scheduler.scale_model_input(lat, t) # ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
 
                     if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
@@ -383,10 +394,10 @@ class SDfu:
                         ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cimg, 1, return_dict=False)
                         ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
                         ctl_mid *= self.a.control_scale
-                        ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                        ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.cnet.to("cpu"); torch.cuda.empty_cache()
-                    
+
                     if cfg_scale in [0, 1]:
                         noise_pred = self.unet(lat_in, t, conds, **ukwargs).sample
                     elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
@@ -400,8 +411,15 @@ class SDfu:
                         for i in range(len(noises)-1):
                             noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # prompt guidance
 
-                    lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
+                    if self.a.sampler == 'lcm':
+                        lat, latend = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs, return_dict=False)
+                    else:
+                        lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
+
                     if verbose and not iscolab: pbar.upd()
+
+            if self.a.sampler == 'lcm':
+                lat = latend
 
             if isok(mask, masked_lat) and not self.inpaintmod: # inpaint with standard models
                 lat = masked_lat * mask + lat * (1.-mask)
