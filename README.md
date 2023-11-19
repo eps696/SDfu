@@ -15,7 +15,7 @@ Current functions:
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * **Smooth & stable video edit** with [TokenFlow]
-* Text to video with [AnimateDiff] and [ZeroScope] models (smooth & stable, virtually unlimited length, as in [ComfyUI])
+* Text to video with [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
 
 Fine-tuning with your images:
@@ -127,6 +127,29 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 *NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume long sequences by design. Pivots batching & CPU offloading (introduced in this repo) pushed the limits, yet didn't removed them. As an example, I managed to process only 300+ frames of 960x540 on a 3090 GPU in batches of 5 without OOM (or without going to the 10x slower shared RAM with new Nvidia drivers).*
 
 
+## Text to Video
+
+Generate video from a text prompt with [AnimateDiff] motion adapter (may combine it with any base SD model):
+```
+python src/anima.py -t "fiery dragon in a China shop" -m 15drm --frames 100 --loop
+```
+Process existing video:
+```
+python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -f 0.7 -m 15drm
+```
+
+Generate video from a text prompt with [ZeroScope] model (kinda obsolete):
+```
+python src/vid.py -t "fiery dragon in a China shop" --model vzs --frames 100 --loop
+```
+Process existing video:
+```
+python src/vid.py -t "combat in the dancehall" --in_vid yourvideo.mp4 --model vzs
+```
+NB: this model is limited to rather mundane stuff, don't expect any notable level of abstraction or fantasy here.
+
+
+
 ## Fine-tuning
 
 * Train new token embedding for a specific subject (e.g. cat) with [textual inversion]:
@@ -166,6 +189,15 @@ You can also run `python src/latwalk.py ...` with finetuned weights to make anim
 Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
 More radical blending can be achieved with multiguidance technique, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
+## Special model: LCM
+
+One of the most impressive recent discoveries is a Latent Consistency Model ([LCM]) architecture. It replaces regular diffusion part by a more direct latent prediction with distilled model, and requires only 2~4 steps to run. Not tested for compatibility with the features above yet.  
+Example of usage:
+```
+python src/gen.py -m lcm -t "hello world"
+python src/gen.py -m lcm -im _in/pix -t "neon light glow" -f 0.4
+```
+
 ## Special model: SDXL
 
 SDXL is not integrated into SDfu core yet, for now it's a separate script, wrapping existing `diffusers` pipelines.  
@@ -184,37 +216,6 @@ NB: The models (heavy!) are auto-downloaded on the first use; you may download t
 As an example, interpolate with ControlNet:
 ```
 python src/kand.py -v -t yourfile.txt -cimg _in/something.jpg -cts 0.6 --size 1280-720 -fs 5
-```
-
-## Special model: LCM
-
-One of the most impressive recent discoveries is a Latent Consistency Model ([LCM]) architecture. It replaces regular diffusion part by a more direct latent prediction with distilled model, and requires only 2~4 steps to run.  
-Example of usage:
-```
-python src/gen.py -m lcm -t "hello world"
-python src/gen.py -m lcm -im _in/pix -t "neon light glow" -f 0.4
-```
-
-
-## Special model: Text to Video
-
-Generate video from a text prompt with [ZeroScope] model:
-```
-python src/vid.py -t "fiery dragon in a China shop" --model vzs --frames 100 --loop
-```
-Process existing video:
-```
-python src/vid.py -t "combat in the dancehall" --in_vid yourvideo.mp4 --model vzs
-```
-NB: this model is limited to rather mundane stuff, don't expect any notable level of abstraction or fantasy here.
-
-Generate video from a text prompt with [AnimateDiff] motion adapter (one can combine it with any base SD model):
-```
-python src/anima.py -t "fiery dragon in a China shop" -m 15drm --frames 100 --loop
-```
-Process existing video:
-```
-python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -f 0.7 -m 15drm
 ```
 
 
