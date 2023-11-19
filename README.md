@@ -15,7 +15,7 @@ Current functions:
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * **Smooth & stable video edit** with [TokenFlow]
-* Text to video with [AnimateDiff] and [ZeroScope] models
+* Text to video with [AnimateDiff] and [ZeroScope] models (smooth & stable, virtually unlimited length, as in [ComfyUI])
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
 
 Fine-tuning with your images:
@@ -198,22 +198,21 @@ python src/gen.py -m lcm -im _in/pix -t "neon light glow" -f 0.4
 
 ## Special model: Text to Video
 
-Generate short video from a text prompt with [ZeroScope] model:
+Generate video from a text prompt with [ZeroScope] model:
 ```
-python src/vid.py -t "dragon in a China shop" --model vzs
+python src/vid.py -t "fiery dragon in a China shop" --model vzs --frames 100 --loop
 ```
-Process existing video in duo (first lo-res [ZeroScope], then hi-res [Potat]):
+Process existing video:
 ```
-python src/vid.py -t "combat in the dancehall" --in_vid yourvideo.mp4 --model vzs --model_up vpot
+python src/vid.py -t "combat in the dancehall" --in_vid yourvideo.mp4 --model vzs
 ```
-Longer input video would be cut in short pieces and processed one by one. It may be better to process only in hi-res (omitting `--model ...` option).  
-NB: the models are limited to rather mundane stuff, don't expect any notable level of abstraction or fantasy here.
+NB: this model is limited to rather mundane stuff, don't expect any notable level of abstraction or fantasy here.
 
-Generate very short video from a text prompt with [AnimateDiff] motion adapter (one can combine it with any base SD model):
+Generate video from a text prompt with [AnimateDiff] motion adapter (one can combine it with any base SD model):
 ```
-python src/anima.py -t "dragon in a China shop" -m 15drm
+python src/anima.py -t "fiery dragon in a China shop" -m 15drm --frames 100 --loop
 ```
-Process existing video with [AnimateDiff] motion adapter:
+Process existing video:
 ```
 python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -f 0.7 -m 15drm
 ```
@@ -244,3 +243,4 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [AnimateDiff]: <https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2>
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>
 [Potat]: <https://huggingface.co/camenduru/potat1>
+[ComfyUI]: <https://github.com/comfyanonymous/ComfyUI>

@@ -30,6 +30,7 @@ def main_args():
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
     parser.add_argument('--precision',      default='autocast')
     parser.add_argument('-b',  '--batch',   default=1, type=int, help="batch size")
+    parser.add_argument(   '--vae_batch',   default=8, type=int, help="batch size for VAE decoding")
     parser.add_argument('-n',  '--num',     default=1, type=int, help="Repeat prompts N times")
     parser.add_argument('-S',  '--seed',    type=int, help="image seed")
     # finetuned stuff

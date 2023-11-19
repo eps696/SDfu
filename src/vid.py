@@ -17,11 +17,13 @@ from core.text import multiprompt
 from core.utils import file_list, basename, progbar, save_cfg
 
 def get_args(parser):
-    parser.add_argument('-iv', '--in_vid',  default=None, help='input image or directory with images (overrides width and height)')
+    parser.add_argument('-iv', '--in_vid',  default=None, help='input video or directory with images (overrides width and height)')
     parser.add_argument('-vf', '--frames', default=36, type=int, help="Frame count for generated video")
+    parser.add_argument('-cf', '--ctx_frames',  default=30, type=int, help="frame count to process at once with sliding window sampling")
+    parser.add_argument(       '--loop',    action='store_true')
     # override
-    parser.add_argument('-m',  '--model',   default=None, help="Lo-res model") # vzs
-    parser.add_argument('-up', '--model_up', default=None, help="Hi-res model") # vpot
+    parser.add_argument('-m',  '--model',   default='vzs', help="Lo-res model")
+    # parser.add_argument('-up', '--model_up', default=None, help="Hi-res model") # vpot
     parser.add_argument('-b',  '--batch',   default=1, type=int, choices=[1])
     parser.add_argument('-sm', '--sampler', default='euler', choices=samplers)
     return parser.parse_args()
@@ -93,23 +95,17 @@ def main():
     # Input
     videoin = []
     if a.in_vid is not None and os.path.exists(a.in_vid):
-        if os.path.isdir(a.in_vid): # make list of videos
-            for path in file_list(a.in_vid):
-                video = torch.from_numpy(np.stack(imageio.mimread(path))).permute(0,3,1,2) # [f,c,h,w]
-                videoin += [video / 127.5 - 1.]
-        else: # split single video to pieces
-            frames = imageio.mimread(a.in_vid, memtest=False)
-            for i in range(math.ceil(len(frames) / a.frames)):
-                subframes = frames[i*a.frames : (i+1)*a.frames]
-                video = torch.from_numpy(np.stack(subframes)).permute(0,3,1,2) # [f,c,h,w]
-                videoin += [video / 127.5 - 1.]
+        videolist = file_list(a.in_vid) if os.path.isdir(a.in_vid) else [a.in_vid]
+        for path in videolist:
+            video = torch.from_numpy(np.stack(imageio.mimread(path))).permute(0,3,1,2) # [f,c,h,w]
+            videoin += [video / 127.5 - 1.]
 
     # Lo res
     videoin = genvid(videoin, a.model, 576, 320, out=True)
-    torch.cuda.empty_cache()
 
     # Hi res
-    genvid(videoin, a.model_up, 1024, 576)
+    # torch.cuda.empty_cache()
+    # genvid(videoin, a.model_up, 1024, 576)
 
 
 if __name__ == '__main__':

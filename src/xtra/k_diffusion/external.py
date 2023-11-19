@@ -166,7 +166,10 @@ class DiscreteVDDPMDenoiser(DiscreteSchedule):
 
     def forward(self, input, sigma, **kwargs):
         c_skip, c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
-        return self.get_v(input * c_in, self.sigma_to_t(sigma), **kwargs) * c_out + input * c_skip
+        vout = self.get_v(input * c_in, self.sigma_to_t(sigma), **kwargs) * c_out 
+# !!! fix for special models (controlnet, upscale, ..)
+        input = input[:, :vout.shape[1], :, :]
+        return vout + input * c_skip
 
 
 class CompVisVDenoiser(DiscreteVDDPMDenoiser):
@@ -175,5 +178,7 @@ class CompVisVDenoiser(DiscreteVDDPMDenoiser):
     def __init__(self, model, quantize=False, device='cpu'):
         super().__init__(model, model.alphas_cumprod, quantize=quantize)
 
-    def get_v(self, x, t, cond, **kwargs):
-        return self.inner_model.apply_model(x, t, cond)
+    # def get_v(self, x, t, cond, **kwargs):
+        # return self.inner_model.apply_model(x, t, cond)
+    def get_v(self, *args, **kwargs):
+        return self.inner_model.apply_model(*args, **kwargs)

@@ -1,6 +1,7 @@
 
 import os, sys
 import time
+import numpy as np
 from contextlib import nullcontext
 
 import torch
@@ -127,7 +128,7 @@ class SDfu:
         self.tokenizer    = self.pipe.tokenizer
         self.unet         = self.pipe.unet
         self.vae          = self.pipe.vae
-        self.scheduler    = self.pipe.scheduler
+        self.scheduler    = self.pipe.scheduler if self.a.sampler=='orig' else self.set_scheduler(self.a)
         self.sched_kwargs = {}
 
     def load_model_custom(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
@@ -170,37 +171,49 @@ class SDfu:
         self.vae = vae
 
         if scheduler is None:
-            sched_path = os.path.join(a.maindir, self.subdir, 'scheduler_config.json')
-            self.sched_kwargs = {}
-            if a.sampler == 'pndm':
-                from diffusers.schedulers import PNDMScheduler
-                scheduler = PNDMScheduler.from_pretrained(sched_path)
-            elif a.sampler == 'dpm':
-                from diffusers.schedulers import DPMSolverMultistepScheduler
-                scheduler = DPMSolverMultistepScheduler(beta_start=0.0001, beta_end=0.02, beta_schedule="scaled_linear", solver_order=2, sample_max_value=1.)
-            elif a.sampler == 'uni':
-                from diffusers.schedulers import UniPCMultistepScheduler
-                scheduler = UniPCMultistepScheduler.from_pretrained(sched_path)
-            elif a.sampler == 'ddim':
-                from diffusers.schedulers import DDIMScheduler
-                scheduler = DDIMScheduler.from_pretrained(sched_path)
-                self.sched_kwargs = {"eta": a.ddim_eta}
-            else:
-                from diffusers.schedulers import LMSDiscreteScheduler
-                import k_diffusion as K
-                scheduler = LMSDiscreteScheduler.from_pretrained(sched_path)
-                model = ModelWrapper(unet, scheduler.alphas_cumprod)
-                self.kdiff_model = K.external.CompVisVDenoiser(model) if vtype else K.external.CompVisDenoiser(model)
-                self.kdiff_model.sigmas     = self.kdiff_model.sigmas.to(device)
-                self.kdiff_model.log_sigmas = self.kdiff_model.log_sigmas.to(device)
-                if   a.sampler == 'klms':    self.sampling_fn = K.sampling.sample_lms
-                elif a.sampler == 'euler':   self.sampling_fn = K.sampling.sample_euler
-                elif a.sampler == 'euler_a': self.sampling_fn = K.sampling.sample_euler_ancestral
-                elif a.sampler == 'dpm2_a':  self.sampling_fn = K.sampling.sample_dpm_2_ancestral # slow but rich!
-                else: print(' Unknown sampler', a.sampler); exit()
+            scheduler = self.set_scheduler(a, self.subdir, vtype)
         self.scheduler = scheduler
 
         self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
+
+    def set_scheduler(self, a, subdir='', vtype=False):
+        if isset(a, 'animdiff'):
+            sched_path = os.path.join(a.maindir, 'scheduler_config-linear.json')
+        else:
+            sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
+        if not os.path.exists(sched_path):
+            sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
+        self.sched_kwargs = {}
+        if a.sampler == 'lcm':
+            from diffusers.schedulers import LCMScheduler
+            scheduler = LCMScheduler.from_pretrained(sched_path)
+        elif a.sampler == 'pndm':
+            from diffusers.schedulers import PNDMScheduler
+            scheduler = PNDMScheduler.from_pretrained(sched_path)
+        elif a.sampler == 'dpm':
+            from diffusers.schedulers import DPMSolverMultistepScheduler
+            scheduler = DPMSolverMultistepScheduler(beta_start=0.0001, beta_end=0.02, beta_schedule="scaled_linear", solver_order=2, sample_max_value=1.)
+        elif a.sampler == 'uni':
+            from diffusers.schedulers import UniPCMultistepScheduler
+            scheduler = UniPCMultistepScheduler.from_pretrained(sched_path)
+        elif a.sampler == 'ddim':
+            from diffusers.schedulers import DDIMScheduler
+            scheduler = DDIMScheduler.from_pretrained(sched_path)
+            self.sched_kwargs = {"eta": a.ddim_eta}
+        else:
+            from diffusers.schedulers import LMSDiscreteScheduler
+            import k_diffusion as K
+            scheduler = LMSDiscreteScheduler.from_pretrained(sched_path)
+            model = ModelWrapper(self.unet, scheduler.alphas_cumprod)
+            self.kdiff_model = K.external.CompVisVDenoiser(model) if vtype else K.external.CompVisDenoiser(model)
+            self.kdiff_model.sigmas     = self.kdiff_model.sigmas.to(device)
+            self.kdiff_model.log_sigmas = self.kdiff_model.log_sigmas.to(device)
+            if   a.sampler == 'klms':    self.sampling_fn = K.sampling.sample_lms
+            elif a.sampler == 'euler':   self.sampling_fn = K.sampling.sample_euler
+            elif a.sampler == 'euler_a': self.sampling_fn = K.sampling.sample_euler_ancestral
+            elif a.sampler == 'dpm2_a':  self.sampling_fn = K.sampling.sample_dpm_2_ancestral # slow but rich!
+            else: print(' Unknown sampler', a.sampler); exit()
+        return scheduler
 
     def final_setup(self, a):
         if isxf: self.pipe.enable_xformers_memory_efficient_attention()
@@ -342,7 +355,7 @@ class SDfu:
                 self.set_steps(self.a.steps, self.a.strength)
 
             if self.use_kdiff:
-                def model_fn(x, t):
+                def model_fn(x, t, tnum=0):
                     ukwargs = {} # kwargs placeholder for unet
                     if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
                         x = torch.cat([x, 1.-mask, masked_lat], dim=1)
@@ -357,27 +370,41 @@ class SDfu:
                         ctl_mid *= self.a.control_scale
                         ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
 
+                    def pred_noise(x_, ukwargs={}):
+                        if len(x_.shape)==5 and x_.shape[2] > self.a.ctx_frames: # sliding sampling for long videos
+                            pred = torch.zeros_like(x_)
+                            slide_count = torch.zeros((1, 1, x_.shape[2], 1, 1), device=x_.device)
+                            for slids in uniform_slide(tnum, x_.shape[2], ctx_size=self.a.ctx_frames, loop=self.a.loop):
+                                noise_pred_sub = self.kdiff_model(x_[:,:,slids], t, cond=conds, **ukwargs)
+                                pred[:,:,slids] += noise_pred_sub
+                                slide_count[:,:,slids] += 1  # increment which indices were used
+                            pred /= slide_count
+                        else:
+                            pred = self.kdiff_model(x_, t, cond=conds, **ukwargs)
+                        return pred
+
                     if cfg_scale in [0, 1]:
-                        noise_pred = self.kdiff_model(x, t, cond=conds, **ukwargs)
+                        noise_pred = pred_noise(x, ukwargs)
                     elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
-                        sigma = self.sigmas[(self.sigmas == t[0]).nonzero().item()]
+                        sigma = self.sigmas[(self.sigmas.half() == t[0].half()).nonzero().item()]
                         x_scaled = x / ((sigma**2 + 1) ** 0.5) # from scheduler.scale_model_input (does not work here)
-                        noises = self.kdiff_model(torch.cat([x_scaled, ilat], dim=1), t, cond=conds) # [noise_un, noise_img, noise_txt, ..]
+                        noises = pred_noise(torch.cat([x_scaled, ilat], dim=1)) # [noise_un, noise_img, noise_txt, ..]
                         noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
-                        for i in range(len(noises)-2):
-                            noise_pred = noise_pred + (noises[i+2] - noises[1]) * cfg_scale * cws[i % len(cws)] # prompt guidance
+                        for n in range(len(noises)-2):
+                            noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
                     else:
-                        noises = self.kdiff_model(x, t, cond=conds, **ukwargs).chunk(bs)
+                        noises = pred_noise(x, ukwargs).chunk(bs)
                         noise_pred = noises[0] # uncond
-                        for i in range(len(noises)-1):
-                            noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # guidance here
+                        for n in range(len(noises)-1):
+                            noise_pred = noise_pred + (noises[n+1] - noises[0]) * cfg_scale * cws[n % len(cws)] # guidance here
                     return noise_pred
+
                 lat = self.sampling_fn(model_fn, lat, self.sigmas[offset:], disable = not verbose)
                 if verbose and not iscolab: print() # compensate pbar printout
 
             else:
                 if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
-                for t in self.timesteps[offset:]:
+                for tnum, t in enumerate(self.timesteps[offset:]):
                     ukwargs = {} # kwargs placeholder for unet
                     lat_in = self.scheduler.scale_model_input(lat, t) # ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
 
@@ -398,18 +425,31 @@ class SDfu:
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.cnet.to("cpu"); torch.cuda.empty_cache()
 
+                    def pred_noise(lat_, ukwargs={}):
+                        if len(lat_.shape)==5 and lat_.shape[2] > self.a.ctx_frames: # sliding sampling for long videos
+                            noise_pred_ = torch.zeros_like(lat_)
+                            slide_count = torch.zeros((1, 1, lat_.shape[2], 1, 1), device=lat_.device)
+                            for slids in uniform_slide(tnum, lat_.shape[2], ctx_size=self.a.ctx_frames, loop=self.a.loop):
+                                noise_pred_sub = self.unet(lat_[:,:,slids], t, conds, **ukwargs).sample
+                                noise_pred_[:,:,slids] += noise_pred_sub
+                                slide_count[:,:,slids] += 1  # increment which indices were used
+                            noise_pred_ /= slide_count
+                        else:
+                            noise_pred_ = self.unet(lat_, t, conds, **ukwargs).sample
+                        return noise_pred_
+
                     if cfg_scale in [0, 1]:
-                        noise_pred = self.unet(lat_in, t, conds, **ukwargs).sample
+                        noise_pred = pred_noise(lat_in, ukwargs)
                     elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
-                        noises = self.unet(torch.cat([lat_in, ilat], dim=1), t, conds).sample.chunk(bs)
+                        noises = pred_noise(torch.cat([lat_in, ilat], dim=1)).chunk(bs)
                         noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
-                        for i in range(len(noises)-2):
-                            noise_pred = noise_pred + (noises[i+2] - noises[1]) * cfg_scale * cws[i % len(cws)] # prompt guidance
+                        for n in range(len(noises)-2):
+                            noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
                     else:
-                        noises = self.unet(lat_in, t, conds, **ukwargs).sample.chunk(bs) # pred noise residual at step t
+                        noises = pred_noise(lat_in, ukwargs).chunk(bs) # pred noise residual at step t
                         noise_pred = noises[0] # uncond
-                        for i in range(len(noises)-1):
-                            noise_pred = noise_pred + (noises[i+1] - noises[0]) * cfg_scale * cws[i % len(cws)] # prompt guidance
+                        for n in range(len(noises)-1):
+                            noise_pred = noise_pred + (noises[n+1] - noises[0]) * cfg_scale * cws[n % len(cws)] # prompt guidance
 
                     if self.a.sampler == 'lcm':
                         lat, latend = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs, return_dict=False)
@@ -429,7 +469,7 @@ class SDfu:
 
             if len(lat.shape)==5: # video
                 lat = lat.permute(0,2,1,3,4).squeeze(0) # [f,c,h,w]
-                output = self.vae.decode(lat).sample
+                output = torch.cat([self.vae.decode(lat[b : b + self.a.vae_batch]).sample.float().cpu() for b in range(0, len(lat), self.a.vae_batch)])
                 output = output[None,:].permute(0,2,1,3,4) # [1,c,f,h,w]
             else: # image
                 output = self.vae.decode(lat).sample
@@ -439,4 +479,28 @@ class SDfu:
                 self.final_offload_hook.offload()
 
             return output
+
+
+# !!! sliding sampling for long videos
+# from https://github.com/ArtVentureX/comfyui-animatediff/blob/main/animatediff/sliding_schedule.py
+def ordered_halving(val, verbose=False): # Returns fraction that has denominator that is a power of 2
+    bin_str = f"{val:064b}" # get binary value, padded with 0s for 64 bits
+    bin_flip = bin_str[::-1] # flip binary value, padding included
+    as_int = int(bin_flip, 2) # convert binary to int
+    final = as_int / (1 << 64) # divide by 1 << 64, equivalent to 2**64, or 18446744073709551616, or 1 with 64 zero's
+    if verbose: print(f"$$$$ final: {final}")
+    return final
+# generate lists of latent indices to process
+def uniform_slide(step, num_frames, ctx_size=16, ctx_stride=1, ctx_overlap=4, loop=True, verbose=False):
+    if num_frames <= ctx_size:
+        yield list(range(num_frames))
+        return
+    ctx_stride = min(ctx_stride, int(np.ceil(np.log2(num_frames / ctx_size))) + 1)
+    pad = int(round(num_frames * ordered_halving(step, verbose)))
+    fstop = num_frames + pad + (0 if loop else -ctx_overlap)
+    for ctx_step in 1 << np.arange(ctx_stride):
+        fstart = int(ordered_halving(step) * ctx_step) + pad
+        fstep = ctx_size * ctx_step - ctx_overlap
+        for j in range(fstart, fstop, fstep):
+            yield [e % num_frames for e in range(j, j + ctx_size * ctx_step, ctx_step)]
 
