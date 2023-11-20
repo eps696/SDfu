@@ -40,7 +40,7 @@ def main():
     sd = SDfu(a)
     a = sd.a
 
-    csb, cwb, _ = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
+    csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
     a.unprompt = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
     uc = multiprompt(sd, a.unprompt)[0][0]
     
@@ -50,15 +50,11 @@ def main():
         else: 
             frames = imageio.mimread(a.in_vid, memtest=False)
         video = torch.from_numpy(np.stack(frames)).permute(0,3,1,2) / 127.5 - 1. # [f,c,h,w]
-        name = basename(a.in_vid)
         if not isset(a, 'size'): a.size = list(video.shape[:-3:-1]) # last 2 reverted
     else:
-        name = basename(a.in_txt) if os.path.exists(a.in_txt) else txt_clean(a.in_txt)
         if not isset(a, 'size'): a.size = [sd.res]
     W, H = calc_size(a.size)
 
-    outdir = os.path.join(a.out_dir, '%s-%d' % (name, sd.seed))
-    os.makedirs(outdir, exist_ok=True)
     if a.verbose: 
         print('.. model', a.model, '..', '%dx%d' % (W,H), '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
         save_cfg(a, a.out_dir)
@@ -74,7 +70,9 @@ def main():
     count = len(csb)
     pbar = progbar(count)
     for n in range(count):
+        name = '%03d-%s-%d' % (n, txt_clean(texts[n]), sd   .seed)
         if a.in_vid is not None:
+            name = basename(a.in_vid) + '-' + name
             video = F.interpolate(video.cuda(), (H, W), mode='bicubic', align_corners=True)
             sd.set_steps(a.steps, a.strength)
             z_ = sd.img_z(video) # [f,c,h,w]
@@ -84,9 +82,12 @@ def main():
             z_ = sd.rnd_z(H, W, a.frames) # [1,c,f,h,w]
 
         video = genmix(z_, csb[n % len(csb)], cwb[n % len(cwb)]).squeeze(0) # [c,f,h,w]
+
         images = img_out(video)
+        outdir = os.path.join(a.out_dir, name)
+        os.makedirs(outdir, exist_ok=True)
         for i, image in enumerate(images):
-            imageio.imsave(os.path.join(outdir, '%04d.jpg' % (n * a.frames + i)), image)
+            imageio.imsave(os.path.join(outdir, '%04d.jpg' % i), image)
         pbar.upd(basename(outdir), uprows=2)
 
 
