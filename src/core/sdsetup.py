@@ -116,6 +116,7 @@ class SDfu:
             from diffusers.models.unet_motion_model import MotionAdapter
             motion_adapter = MotionAdapter.from_pretrained(a.animdiff)
             self.unet = UNetMotionModel.from_unet2d(self.unet, motion_adapter)
+            self.scheduler = self.set_scheduler(a) # k-samplers must be loaded after unet
             if not self.a.lowmem: self.unet.to(device)
             self.pipe.register_modules(unet = self.unet, motion_adapter = motion_adapter)
 
