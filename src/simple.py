@@ -2,6 +2,8 @@
 import os
 import time
 import argparse
+import warnings
+warnings.filterwarnings("ignore")
 
 import torch
 from pytorch_lightning import seed_everything
@@ -90,7 +92,7 @@ def sd_setup(a):
         lat = torch.randn(shape_, device=device)
         return scheduler.init_noise_sigma * lat # scale initial noise by std required by the scheduler; not needed for ddim/pndm
     def txt_c(txt):
-        prompt_tokens = tokenizer(txt)
+        prompt_tokens = tokenizer(txt, padding="max_length", max_length=tokenizer.model_max_length, return_tensors="pt")
         prompt_embeds = text_encoder(prompt_tokens.input_ids.to(device))[0]
         return prompt_embeds.to(dtype=text_encoder.dtype)
 
@@ -101,6 +103,7 @@ def sd_setup(a):
 
     def generate(lat, c_):
         with torch.no_grad(), torch.autocast('cuda'):
+            print(uc.shape, c_.shape)
             conds = torch.cat([uc, c_])
 
             pbar = progbar(len(timesteps) - 1)
@@ -111,7 +114,7 @@ def sd_setup(a):
                 noise_pred_uncond, noise_pred_cond = unet(lat_in, t, conds).sample.chunk(2) # pred noise residual at step t
                 noise_pred = noise_pred_uncond + a.cfg_scale * (noise_pred_cond - noise_pred_uncond) # guidance here
 
-                lat = scheduler.step(noise_pred, t, lat, **sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
+                lat = scheduler.step(noise_pred, t, lat).prev_sample # compute previous noisy sample x_t -> x_t-1
                 pbar.upd()
 
             # decode latents
