@@ -23,7 +23,6 @@ def get_args(parser):
     parser.add_argument(       '--vae',     default=None, help='UNUSED')
     parser.add_argument('-cg', '--cguide',  action=None, help='UNUSED')
     parser.add_argument('-lo', '--lowmem',  action=None, help='UNUSED')
-    parser.add_argument('--precision',      default=None, help='UNUSED')
     parser.add_argument('-rt', '--load_token', default=None, help='UNUSED')
     parser.add_argument('-rd', '--load_custom', default=None, help='UNUSED')
     parser.add_argument('-rl', '--load_lora', default=None, help='UNUSED')

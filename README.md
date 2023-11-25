@@ -21,7 +21,7 @@ Current functions:
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
 * Add subject (new token + Unet delta) with [custom diffusion]
-* Add subject (new token + Unet delta) with [LoRA] (custom implementation)
+* Add subject (Unet low rank delta) with [LoRA]
 
 Other features:
 * Memory efficient with `xformers` (hi res on 6gb VRAM GPU)
@@ -88,6 +88,11 @@ Models can be selected with `--model` option by either a shortcut (15, 15drm, 21
 Check other options and their shortcuts by running these scripts with `--help` option.  
 
 There are also few Windows bat-files, slightly simplifying and automating the commands. 
+
+### Prompts structure 
+
+Text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
+More radical blending can be achieved with multiguidance technique, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
 
 ## Guide synthesis with [ControlNet] or [Instruct pix2pix]
@@ -156,11 +161,11 @@ NB: this model is limited to rather mundane stuff, don't expect any notable leve
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.001 --type text
 ```
-* Finetune the model (namely, part of the Unet attention layers) with [LoRA] *(incompatible with `diffusers` standard!)*:
+* Finetune the model (namely, part of the Unet attention layers) with [LoRA]:
 ```
-python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.0001 --type lora
+python src/train.py --data data/mycat1 -lr 0.0001 --type lora
 ```
-* Do the same with [custom diffusion]:
+* Train both token embedding & Unet attentions with [custom diffusion]:
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 --term_data data/cat --type custom
 ```
@@ -168,26 +173,25 @@ Add `--style` if you're training for a style rather than an object. Speed up [cu
 Results of the trainings will be saved under `train` directory. 
 
 Custom diffusion trains faster and can achieve impressive reproduction quality (including faces) with simple similar prompts, but it can lose the point on generation if the prompt is too complex or aside from the original category. To train it, you'll need both target reference images (`data/mycat1`) and more random images of similar subjects (`data/cat`). Apparently, you can generate the latter with SD itself.  
-LoRA finetuning seems less precise, while may interfere with wider spectrum of topics.  
+LoRA finetuning seems less precise while may affect wider spectrum of topics, and is a de-facto industry standard now.  
 Textual inversion is more generic but stable. Also, its embeddings can be easily combined together on load.  
 
-* Generate image with trained embedding and weights from [LoRA]:
+* Generate image with trained weights from [LoRA]:
 ```
-python src/gen.py -t "cosmic <mycat1> beast" --load_lora mycat1-lora.pt
+python src/gen.py -t "cosmic beast cat" --load_lora mycat1-lora.pt
 ```
 * Same with [custom diffusion]:
 ```
-python src/gen.py -t "cosmic <mycat1> beast" --load_custom mycat1-custom.pt
+python src/gen.py -t "cosmic <mycat1> cat beast" --load_custom mycat1-custom.pt
 ```
 * Same with [textual inversion] (you may provide a folder path to load few files at once):
 ```
-python src/gen.py -t "cosmic <mycat1> beast" --load_token mycat1-text.pt
+python src/gen.py -t "cosmic <mycat1> cat beast" --load_token mycat1-text.pt
 ```
+Note that you should add (mind the brackets) `<token> term ..` keywords to the prompt to activate learned subject with Text Inversion or Custom Diffusion. Put it in the beginning for learned objects, or at the end for styles. LoRA is not bound to such syntax.  
 
 You can also run `python src/latwalk.py ...` with finetuned weights to make animations.
 
-Besides special tokens (e.g. `<mycat1>`) as above, text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
-More radical blending can be achieved with multiguidance technique, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
 ## Special model: LCM
 
@@ -217,7 +221,6 @@ As an example, interpolate with ControlNet:
 ```
 python src/kand.py -v -t yourfile.txt -cimg _in/something.jpg -cts 0.6 --size 1280-720 -fs 5
 ```
-
 
 ## Credits
 

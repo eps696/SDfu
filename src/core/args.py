@@ -28,7 +28,6 @@ def main_args():
     parser.add_argument('-if', '--img_scale', default=None, type=float, help='image guidance scale for Instruct pix2pix. None = disabled it')
     parser.add_argument(      '--ddim_eta', default=0., type=float)
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
-    parser.add_argument('--precision',      default='autocast')
     parser.add_argument('-b',  '--batch',   default=1, type=int, help="batch size")
     parser.add_argument(   '--vae_batch',   default=8, type=int, help="batch size for VAE decoding")
     parser.add_argument('-n',  '--num',     default=1, type=int, help="Repeat prompts N times")
@@ -43,6 +42,7 @@ def main_args():
     parser.add_argument('-cts', '--control_scale', default=0.7, type=float, help="ControlNet effect scale")
     # misc
     parser.add_argument('-cg', '--cguide',  action='store_true', help='Use noise guidance for interpolation, instead of cond lerp')
+    parser.add_argument('-fu',  '--freeu',  action='store_true', help='Use FreeU enhancement (Fourier representations in Unet)')
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
     parser.add_argument('-lo', '--lowmem',  action='store_true', help='Offload subnets onto CPU for higher resolution [slower]')
     parser.add_argument('-inv', '--invert_mask', action='store_true')

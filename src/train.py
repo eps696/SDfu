@@ -18,8 +18,8 @@ transformers.utils.logging.set_verbosity_warning()
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import StableDiffusionPipeline, AutoencoderKL, UNet2DConditionModel, DDIMScheduler
 
-from core.finetune import FinetuneDataset, custom_diff, prep_lora, save_delta, load_delta, save_lora, load_loras, save_embeds
-from core.utils import save_img, save_cfg, isset, progbar
+from core.finetune import FinetuneDataset, custom_diff, prep_lora, save_delta, load_delta, save_embeds
+from core.utils import save_img, save_cfg, isset, progbar, basename
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -32,7 +32,7 @@ parser.add_argument('--term',           default=None, help="generic word(s), ass
 parser.add_argument('--data',           default=None, help="folder containing target images")
 parser.add_argument('--term_data',      default=None, help="folder containing generic class images (priors for new token)")
 parser.add_argument('-st', '--style',   action='store_true', help="Train for a visual style (otherwise for objects)")
-parser.add_argument('-m',  '--model',   default='15', choices=['15','15drm','21','21v'])
+parser.add_argument('-m',  '--model',   default='15')
 parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
 parser.add_argument('-rd', '--load_custom', default=None, help="path to the custom diffusion delta checkpoint to resume from")
 parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file to resume from")
@@ -61,60 +61,82 @@ g_ = torch.Generator("cuda").manual_seed(a.seed)
 if a.style or a.aug_img:
     a.aug_txt = True
 
+class SDpipe(StableDiffusionPipeline):
+    def __init__(self, vae, text_encoder, tokenizer, unet, scheduler, safety_checker=None, feature_extractor=None, requires_safety_checker=False):
+        super().__init__(vae, text_encoder, tokenizer, unet, scheduler, None, None, requires_safety_checker=False)
+        self.register_modules(vae=vae, text_encoder=text_encoder, tokenizer=tokenizer, unet=unet, scheduler=scheduler)
+
 def main():
-    a.out_dir = os.path.join(a.out_dir, '%s-%s-m%s' % (a.token, a.type, a.model))
+    a.out_dir = os.path.join(a.out_dir, '%s-%s-m%s' % (a.token or basename(a.data), a.type, basename(a.model)))
     os.makedirs(a.out_dir, exist_ok=True)
     save_cfg(a, a.out_dir)
 
-    # paths
-    subdir = 'v2v' if a.model=='21v' else 'v2' if a.model[0]=='2' else 'v1'
-    txtenc_path = os.path.join(a.maindir, subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text')
-    sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
-    unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
-    vae_path = os.path.join(a.maindir, subdir, 'vae')
+    if os.path.exists(a.model):
+        SDload = StableDiffusionPipeline.from_single_file if os.path.isfile(a.model) else StableDiffusionPipeline.from_pretrained
+        pipe = SDload(a.model, torch_dtype=torch.float16, revision='fp16', safety_checker=None, requires_safety_checker=False)
+        pipe.to(device)
+        text_encoder = pipe.text_encoder
+        tokenizer    = pipe.tokenizer
+        unet         = pipe.unet
+        vae          = pipe.vae
+        scheduler    = pipe.scheduler
+    else:
+        # paths
+        subdir = 'v2v' if a.model=='21v' else 'v2' if a.model[0]=='2' else 'v1'
+        txtenc_path = os.path.join(a.maindir, subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text')
+        sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
+        unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
+        vae_path = os.path.join(a.maindir, subdir, 'vae')
+        # load models
+        text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16).to(device)
+        tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16)
+        unet  = UNet2DConditionModel.from_pretrained(unet_path,   torch_dtype=torch.float16).to(device)
+        vae          = AutoencoderKL.from_pretrained(vae_path,    torch_dtype=torch.float16).to(device)
+        scheduler    = DDIMScheduler.from_pretrained(sched_path)
+        pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
 
-    # load models
-    text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16).to(device)
-    tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16)
-    unet  = UNet2DConditionModel.from_pretrained(unet_path,   torch_dtype=torch.float16).to(device)
-    vae          = AutoencoderKL.from_pretrained(vae_path,    torch_dtype=torch.float16).to(device)
-    scheduler    = DDIMScheduler.from_pretrained(sched_path)
     resolution = unet.config.sample_size * 2 ** (len(vae.config.block_out_channels) - 1)
 
     if a.type=='custom' and a.load_custom is not None:
         _ = load_delta(torch.load(a.load_custom), unet, text_encoder, tokenizer, freeze_model=a.freeze_model)
     elif a.type=='lora' and a.load_lora is not None:
-        _ = load_loras(torch.load(a.load_lora), unet, text_encoder, tokenizer)
+        _ = pipe.load_lora_weights(a.load_lora)
 
     # parse inputs
-    with_prior = a.term_data is not None and a.term is not None # Use generic terms as priors
-    mod_tokens  = ['<%s>' % t for t in a.token.split('+')]
-    init_tokens = a.term.split('+')
+    train_txtenc = a.type in ['text','custom']
+    with_prior = train_txtenc and a.term_data is not None and a.term is not None # Use generic terms as priors
     data_dirs   = a.data.split('+')
-    assert len(mod_tokens) == len(init_tokens) == len(data_dirs), "Provide equal num of tokens, terms and data folders (separated by '+')"
-    if with_prior:
-        term_data_dirs = a.term_data.split('+')
-        assert len(mod_tokens) == len(term_data_dirs), "Provide equal num of tokens, terms and data folders (separated by '+')"
+    if train_txtenc:
+        init_tokens = a.term.split('+')
+        mod_tokens  = ['<%s>' % t for t in a.token.split('+')]
+        assert len(mod_tokens) == len(init_tokens) == len(data_dirs), "Provide equal num of tokens, terms and data folders (separated by '+')"
+        if with_prior:
+            term_data_dirs = a.term_data.split('+')
+            assert len(mod_tokens) == len(term_data_dirs), "Provide equal num of tokens, terms and data folders (separated by '+')"
 
     # prepare tokens
-    mod_tokens_id  = []
-    init_tokens_id = []
-    for mod_token, init_token in zip(mod_tokens, init_tokens):
-        num_added_tokens = tokenizer.add_tokens(mod_token)
-        mod_tokens_id.append(tokenizer.convert_tokens_to_ids(mod_token)) # non-existing token
-        init_tokens_id.append(tokenizer.encode(init_token, add_special_tokens=False)[0]) # existing token
-    print(' tokens :: mod', mod_tokens, mod_tokens_id, '.. init', init_tokens, init_tokens_id, '.. with prior' if with_prior else "")
-    # Init new token(s) with the given initial token(s)
-    text_encoder.resize_token_embeddings(len(tokenizer)) # new token in tokenizer => resize token embeddings
-    token_embeds = text_encoder.get_input_embeddings().weight.data
-    for (x,y) in zip(mod_tokens_id, init_tokens_id):
-        token_embeds[x] = token_embeds[y]
+    if train_txtenc:
+        mod_tokens_id  = []
+        init_tokens_id = []
+        for mod_token, init_token in zip(mod_tokens, init_tokens):
+            num_added_tokens = tokenizer.add_tokens(mod_token)
+            mod_tokens_id.append(tokenizer.convert_tokens_to_ids(mod_token)) # non-existing token
+            init_tokens_id.append(tokenizer.encode(init_token, add_special_tokens=False)[0]) # existing token
+        print(' tokens :: mod', mod_tokens, mod_tokens_id, '.. init', init_tokens, init_tokens_id, '.. with prior' if with_prior else "")
+        # Init new token(s) with the given initial token(s)
+        text_encoder.resize_token_embeddings(len(tokenizer)) # new token in tokenizer => resize token embeddings
+        token_embeds = text_encoder.get_input_embeddings().weight.data
+        for (x,y) in zip(mod_tokens_id, init_tokens_id):
+            token_embeds[x] = token_embeds[y]
 
     # data
-    inputs = [{"caption": '%s %s' % (mod_tokens[i], init_tokens[i]), "term": init_tokens[i], "data": data_dirs[i]} for i in range(len(mod_tokens))]
-    if with_prior:
-        inputs = [{**inputs[i], "term_data": term_data_dirs[i]} for i in range(len(mod_tokens))]
-    train_dataset = FinetuneDataset(inputs, tokenizer, resolution, style=a.style, aug_img=a.aug_img, aug_txt=a.aug_txt, add_caption = a.type=='lora', flip=True)
+    if train_txtenc:
+        inputs = [{"caption": '%s %s' % (mod_tokens[i], init_tokens[i]), "term": init_tokens[i], "data": data_dirs[i]} for i in range(len(mod_tokens))]
+        if with_prior:
+            inputs = [{**inputs[i], "term_data": term_data_dirs[i]} for i in range(len(mod_tokens))]
+    else: # lora
+        inputs = [{"caption": None, "data": data_dirs[i]} for i in range(len(data_dirs))]
+    train_dataset = FinetuneDataset(inputs, tokenizer, resolution, style=a.style, aug_img=a.aug_img, aug_txt=a.aug_txt, flip=True)
     def collate_fn(examples):
         input_ids = [example["instance_token_id"] for example in examples]
         images    = [example["instance_image"]    for example in examples]
@@ -129,9 +151,12 @@ def main():
     # cast modules :: inference = fp16 freezed, training = fp32 with grad
     weight_dtype = torch.float16 # torch.float16 torch.bfloat16
     vae.to(dtype=weight_dtype).requires_grad_(False)
-    text_encoder.text_model.encoder.requires_grad_(False)
-    text_encoder.text_model.final_layer_norm.requires_grad_(False)
-    text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
+    if train_txtenc:
+        text_encoder.text_model.encoder.requires_grad_(False)
+        text_encoder.text_model.final_layer_norm.requires_grad_(False)
+        text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
+    else:
+        text_encoder.to(dtype=weight_dtype).requires_grad_(False)
     if a.type=='lora':
         unet, lora_layers = prep_lora(unet)
         unet.requires_grad_(False)
@@ -145,7 +170,7 @@ def main():
         unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
         unet0 = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16) # required to compress delta
     unet.to(dtype=unet_dtype)
-    text_encoder.to(dtype=torch.float32) # !!! must be trained as float32; otherwise inf/nan
+    text_encoder.to(dtype=torch.float32) # !!! must be trained as float32 + avoiding q/k/v mistype error at lora validation
 
     if a.xformers is True and a.type != 'lora':
         try:
@@ -155,7 +180,8 @@ def main():
 
     if a.low_mem:
         unet.enable_gradient_checkpointing()
-        text_encoder.gradient_checkpointing_enable()
+        if train_txtenc:
+            text_encoder.gradient_checkpointing_enable()
 
     if a.scale_lr:
         a.lr *= a.batch_size
@@ -166,7 +192,7 @@ def main():
     if a.type == 'text': # text inversion: only new embedding(s)
         params_to_optimize = text_encoder.get_input_embeddings().parameters()
     elif a.type == 'lora':
-        params_to_optimize = itertools.chain(text_encoder.get_input_embeddings().parameters(), lora_layers.parameters())
+        params_to_optimize = lora_layers.parameters()
     elif a.freeze_model == 'crossattn': # custom: embeddings & unet attention all
         params_to_optimize = itertools.chain(text_encoder.get_input_embeddings().parameters(), 
                                              [x[1] for x in unet.named_parameters() if 'attn2' in x[0]])
@@ -185,7 +211,7 @@ def main():
     pbar = progbar(a.train_steps)
     for epoch in range(num_epochs):
         if a.type in ['lora', 'custom']: unet.train()
-        text_encoder.train()
+        if train_txtenc: text_encoder.train()
         for step, batch in enumerate(train_dataloader):
             latents = vae.encode(batch["images"].to(dtype=weight_dtype)).latent_dist.sample().detach()
             latents = latents * vae.config.scaling_factor # 0.18215
@@ -210,11 +236,12 @@ def main():
             loss.backward()
 
             # ensure we don't update any other embeddings except new token
-            grads_text_encoder = text_encoder.get_input_embeddings().weight.grad
-            index_no_updates = torch.arange(len(tokenizer)) != mod_tokens_id[0]
-            for i in range(len(mod_tokens_id[1:])):
-                index_no_updates = index_no_updates & (torch.arange(len(tokenizer)) != mod_tokens_id[i])
-            grads_text_encoder.data[index_no_updates, :] = grads_text_encoder.data[index_no_updates, :].fill_(0)
+            if train_txtenc:
+                grads_text_encoder = text_encoder.get_input_embeddings().weight.grad
+                index_no_updates = torch.arange(len(tokenizer)) != mod_tokens_id[0]
+                for i in range(len(mod_tokens_id[1:])):
+                    index_no_updates = index_no_updates & (torch.arange(len(tokenizer)) != mod_tokens_id[i])
+                grads_text_encoder.data[index_no_updates, :] = grads_text_encoder.data[index_no_updates, :].fill_(0)
 
             optimizer.step()
             optimizer.zero_grad()
@@ -227,17 +254,23 @@ def main():
                 elif a.type == 'custom':
                     save_delta(save_path, unet, text_encoder, mod_tokens, mod_tokens_id, a.freeze_model, unet0=unet0)
                 elif a.type == 'lora':
-                    save_lora(save_path, lora_layers.state_dict(), text_encoder, mod_tokens, mod_tokens_id)
+                    save_path = os.path.join(a.out_dir, '%s-%s-%04d.pt' % (basename(a.data), a.type, global_step))
+                    torch.save(lora_layers.state_dict(), save_path)
 
                 # test sample
                 if a.validate:
                     pipetest = StableDiffusionPipeline(vae, text_encoder, tokenizer, unet, scheduler, None, None, False).to(device)
                     pipetest.set_progress_bar_config(disable=True)
                     with torch.autocast("cuda"):
-                        for i, (mod_token, init_token) in enumerate(zip(mod_tokens, init_tokens)):
-                            prompt = 'photo of %s %s' % (mod_token, init_token)
+                        if train_txtenc:
+                            for i, (mod_token, init_token) in enumerate(zip(mod_tokens, init_tokens)):
+                                prompt = 'photo of %s %s' % (mod_token, init_token)
+                                image = pipetest(prompt, num_inference_steps=50, generator=g_).images[0]
+                                image.save(os.path.join(a.out_dir, '%s-%04d.jpg' % (mod_token[1:-1], global_step)))
+                        else:
+                            prompt = a.token or 'a nice photo'
                             image = pipetest(prompt, num_inference_steps=50, generator=g_).images[0]
-                            image.save(os.path.join(a.out_dir, '%s-%04d.jpg' % (mod_token[1:-1], global_step)))
+                            image.save(os.path.join(a.out_dir, '%s-%04d.jpg' % (basename(a.data), global_step)))
 
             pbar.upd("loss %.4g" % loss.detach().item())
 
@@ -250,7 +283,8 @@ def main():
     elif a.type == 'custom':
         save_delta(save_path, unet, text_encoder, mod_tokens, mod_tokens_id, a.freeze_model, unet0=unet0)
     elif a.type == 'lora':
-        save_lora(save_path, lora_layers.state_dict(), text_encoder, mod_tokens, mod_tokens_id)
+        save_path = os.path.join(a.out_dir, '%s-%s.pt' % (basename(a.data), a.type))
+        torch.save(lora_layers.state_dict(), save_path)
 
 
 if __name__ == "__main__":

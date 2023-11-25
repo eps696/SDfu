@@ -47,20 +47,13 @@ class ModelWrapper: # for k-sampling
             conds = kwargs.pop("cond")
         return self.model(*args, encoder_hidden_states=conds, **kwargs).sample
 
-def set_sampler(scheduler_type: str):
-    library = importlib.import_module("k_diffusion")
-    sampling = getattr(library, "sampling")
-    sampler = getattr(sampling, scheduler_type)
-    return sampler
-
 
 class SDfu:
     def __init__(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # settings
         self.a = a
         self.device = device
-        self.use_half = isset(a, 'precision') and a.precision not in ['full', 'float32', 'fp32']
-        self.precision_scope = torch.autocast if self.use_half else nullcontext
+        self.run_scope = nullcontext # torch.autocast
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
 
@@ -80,11 +73,8 @@ class SDfu:
         # load finetuned stuff
         mod_tokens = None
         if isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
-            if a.load_lora.endswith('.safetensors'): # downloaded
-                self.pipe.load_lora_weights(a.load_lora)
-            else: # custom, trained here
-                from .finetune import load_loras
-                mod_tokens = load_loras(torch.load(a.load_lora), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
+            self.pipe.load_lora_weights(a.load_lora)
+            if a.verbose: print(' loaded LoRA', a.load_lora)
         elif isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
             from .finetune import load_delta, custom_diff
             self.pipe.unet = custom_diff(self.pipe.unet, train=False)
@@ -119,6 +109,7 @@ class SDfu:
             self.scheduler = self.set_scheduler(a) # k-samplers must be loaded after unet
             if not self.a.lowmem: self.unet.to(device)
             self.pipe.register_modules(unet = self.unet, motion_adapter = motion_adapter)
+            if a.verbose: print(' loaded AnimateDiff', a.animdiff)
 
         self.final_setup(a)
 
@@ -218,6 +209,7 @@ class SDfu:
 
     def final_setup(self, a):
         if isxf: self.pipe.enable_xformers_memory_efficient_attention()
+        if isset(a, 'freeu'): self.pipe.unet.enable_freeu(s1=1.5, s2=1.6, b1=0.9, b2=0.2) # 2.1 1.4, 1.6, 0.9, 0.2, sdxl 1.3, 1.4, 0.9, 0.2
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
         self.res = self.unet.config.sample_size * self.vae_scale # original model resolution (not for video models!)
@@ -281,16 +273,15 @@ class SDfu:
         return next_sample
 
     def img_lat(self, image, deterministic=False):
-        if self.use_half: image = image.half()
-        postr = self.vae.encode(image).latent_dist
-        lats = postr.mean if deterministic else postr.sample()
-        lats *= self.vae.config.scaling_factor
+        with self.run_scope('cuda'):
+            postr = self.vae.encode(image).latent_dist
+            lats = postr.mean if deterministic else postr.sample()
+            lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
 
     def ddim_inv(self, lat, cond, cimg=None): # ddim inversion, slower, ~exact
         ukwargs = {}
-        if isset(self.a, 'load_lora') and isxf: cond = cond.float() # otherwise q/k/v mistype error
-        with self.precision_scope('cuda'):
+        with self.run_scope('cuda'):
             for t in reversed(self.scheduler.timesteps):
                 with torch.no_grad():
                     if self.use_cnet and cimg is not None: # controlnet
@@ -303,7 +294,7 @@ class SDfu:
         return lat
 
     def lat_z(self, lat):
-        with self.precision_scope('cuda'):
+        with self.run_scope('cuda'):
             if self.use_kdiff: # k-samplers, fast, not exact
                 return lat + torch.randn_like(lat) * self.sigmas[0]
             else: # ddim stochastic encode, fast, not exact
@@ -317,7 +308,7 @@ class SDfu:
             shape_ = (self.a.batch, 4,         H // self.vae_scale, W // self.vae_scale)
         else: # video
             shape_ = (self.a.batch, 4, frames, H // self.vae_scale, W // self.vae_scale)
-        lat = torch.randn(shape_, generator=self.g_, device=device)
+        lat = torch.randn(shape_, generator=self.g_, device=device, dtype=torch.float16)
         return self.scheduler.init_noise_sigma * lat
 
     def prep_mask(self, mask_str, img_path, init_image=None):
@@ -331,7 +322,7 @@ class SDfu:
 
     def prep_depth(self, init_image):
         [H, W] = init_image.shape[-2:]
-        with torch.no_grad(), torch.autocast("cuda"):
+        with torch.no_grad(), self.run_scope('cuda'):
             preps = self.feat_extractor(images=[(init_image.squeeze(0)+1)/2], return_tensors="pt").pixel_values
             preps = F.interpolate(preps, size=[384,384], mode="bicubic", align_corners=False).to(device)
             dd = self.depth_estimator(preps).predicted_depth.unsqueeze(0) # [1,1,384,384]
@@ -342,13 +333,10 @@ class SDfu:
 
     def generate(self, lat, cs, uc, cfg_scale=None, mask=None, masked_lat=None, depth=None, cws=None, cimg=None, ilat=None, offset=0, verbose=True):
         if cfg_scale is None: cfg_scale = self.a.cfg_scale
-        with torch.no_grad(), self.precision_scope('cuda'):
+        with torch.no_grad(), self.run_scope('cuda'):
             if cws is None or not len(cws) == len(cs): cws = [1 / len(cs)] * len(cs)
-            if self.a.batch > 1:
-                uc = uc.repeat(self.a.batch, 1, 1)
-                cs = cs.repeat_interleave(self.a.batch, 0)
             conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
-            if isset(self.a, 'load_lora') and isxf: conds = conds.float() # otherwise q/k/v mistype error
+            if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
             bs = len(conds) // self.a.batch
             if cimg is not None: cimg = cimg.repeat_interleave(len(conds) // len(cimg), 0)
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
@@ -357,6 +345,7 @@ class SDfu:
 
             if self.use_kdiff:
                 def model_fn(x, t, tnum=0):
+                    x = x.half()
                     ukwargs = {} # kwargs placeholder for unet
                     if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
                         x = torch.cat([x, 1.-mask, masked_lat], dim=1)

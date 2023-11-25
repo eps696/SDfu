@@ -18,6 +18,7 @@ def get_args(parser):
 def main():
     a = get_args(main_args())
     sd = SDfu(a)
+    a = sd.a
 
     a.model = basename(a.model)
     a.seed = sd.seed
@@ -58,10 +59,10 @@ def main():
             images = sd.generate(z_, c_, uc, **gendict)
         return images
     
-    gendict = {}
     pbar = progbar(count)
     for i in range(count):
-        log = texts[i % len(texts)] if len(texts) > 0 else ''
+        gendict = {}
+        log = texts[i % len(texts)][:80] if len(texts) > 0 else ''
 
         if isset(a, 'in_img'):
             img_path = img_paths[i % len(img_paths)]
@@ -87,7 +88,6 @@ def main():
             file_out = '%03d-%s-m%s-%s-%d' % (i, log, a.model, a.sampler, sd.seed)
             W, H = [sd.res]*2 if size is None else size
             z_ = sd.rnd_z(H, W)
-            gendict = {}
 
         if len(cimgs) > 0:
             cdict['cimg'] = (load_img(cimgs[i % len(cimgs)], (W,H))[0] + 1) / 2
