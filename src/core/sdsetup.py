@@ -3,6 +3,7 @@ import os, sys
 import time
 import numpy as np
 from contextlib import nullcontext
+from einops import rearrange
 
 import torch
 import torch.nn.functional as F
@@ -71,6 +72,7 @@ class SDfu:
         else: # downloaded or url
             self.load_model_external(a.model)
         self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
+        assert not (isset(a, 'control_mod') and self.use_kdiff), "Controlnet not supported for k-samplers here"
         if not self.a.lowmem: self.pipe.to(device)
 
         # load finetuned stuff
@@ -357,7 +359,7 @@ class SDfu:
             conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
             bs = len(conds) // self.a.batch
-            if cnimg is not None: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
+            if cnimg is not None and len(lat.shape)==4: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
             if c_img is not None: 
                 uc_img = torch.zeros_like(c_img) # [1,1024]
@@ -380,40 +382,37 @@ class SDfu:
                     if c_img is not None: # encoded img for ip adapter
                         ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
 
-                    if self.use_cnet and cnimg is not None: # controlnet = max 960x640 or 768 on 16gb
-                        ctl_downs, ctl_mid = self.cnet(x, t, conds, cnimg, 1, return_dict=False)
-                        ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
-                        ctl_mid *= self.a.control_scale
-                        ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
-
-                    def pred_noise(x_, ukwargs={}):
-                        if len(x_.shape)==5 and x_.shape[2] > self.a.ctx_frames: # sliding sampling for long videos
-                            pred = torch.zeros_like(x_)
-                            slide_count = torch.zeros((1, 1, x_.shape[2], 1, 1), device=x_.device)
-                            for slids in uniform_slide(tnum, x_.shape[2], ctx_size=self.a.ctx_frames, loop=self.a.loop):
-                                noise_pred_sub = self.kdiff_model(x_[:,:,slids], t, cond=conds, **ukwargs)
-                                pred[:,:,slids] += noise_pred_sub
-                                slide_count[:,:,slids] += 1  # increment which indices were used
-                            pred /= slide_count
+                    def calc_pred(x, t, conds, ukwargs={}):
+                        if cfg_scale in [0, 1]:
+                            pred = self.kdiff_model(x, t, cond=conds, **ukwargs)
+                        elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
+                            preds = self.kdiff_model(torch.cat([x, ilat], dim=1), t, cond=conds).chunk(bs)
+                            pred = preds[0] + self.a.img_scale * (preds[1] - preds[0]) # uncond + image guidance
+                            for n in range(len(preds)-2):
+                                pred = pred + (preds[n+2] - preds[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
                         else:
-                            pred = self.kdiff_model(x_, t, cond=conds, **ukwargs)
+                            preds = self.kdiff_model(x, t, cond=conds, **ukwargs).chunk(bs)
+                            pred = preds[0] # uncond
+                            for n in range(len(preds)-1):
+                                pred = pred + (preds[n+1] - preds[0]) * cfg_scale * cws[n % len(cws)] # prompt guidance
                         return pred
 
-                    if cfg_scale in [0, 1]:
-                        noise_pred = pred_noise(x, ukwargs)
-                    elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
-                        sigma = self.sigmas[(self.sigmas.half() == t[0].half()).nonzero().item()]
-                        x_scaled = x / ((sigma**2 + 1) ** 0.5) # from scheduler.scale_model_input (does not work here)
-                        noises = pred_noise(torch.cat([x_scaled, ilat], dim=1)) # [noise_un, noise_img, noise_txt, ..]
-                        noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
-                        for n in range(len(noises)-2):
-                            noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
-                    else:
-                        noises = pred_noise(x, ukwargs).chunk(bs)
-                        noise_pred = noises[0] # uncond
-                        for n in range(len(noises)-1):
-                            noise_pred = noise_pred + (noises[n+1] - noises[0]) * cfg_scale * cws[n % len(cws)] # guidance here
-                    return noise_pred
+                    if len(x.shape)==4: # unet2D [b,c,h,w]
+                        pred = calc_pred(x, t, conds, ukwargs)
+                    else: # unet3D [b,c,f,h,w]
+                        frames = x.shape[2]
+                        if frames > self.a.ctx_frames: # sliding sampling for long videos
+                            pred = torch.zeros_like(x[:1])
+                            slide_count = torch.zeros((1, 1, x.shape[2], 1, 1), device=x.device)
+                            for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
+                                pred_sub = calc_pred(x[:,:,slids], t, conds, ukwargs)
+                                pred[:,:,slids] += pred_sub
+                                slide_count[:,:,slids] += 1  # increment which indices were used
+                            pred /= slide_count
+                        else: # single context video
+                            pred = calc_pred(x, t, conds, ukwargs)
+
+                    return pred
 
                 lat = self.sampling_fn(model_fn, lat, self.sigmas[offset:], disable = not verbose)
                 if verbose and not iscolab: print() # compensate pbar printout
@@ -434,41 +433,63 @@ class SDfu:
                     if c_img is not None: # encoded img for ip adapter
                         ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
 
-                    if self.use_cnet and cnimg is not None: # controlnet fits max 960x640 on 16gb vram
+                    def calc_noise(x, t, conds, ukwargs={}):
+                        if cfg_scale in [0, 1]:
+                            noise_pred = self.unet(x, t, conds, **ukwargs).sample
+                        elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
+                            noises = self.unet(torch.cat([x, ilat], dim=1), t, conds).sample.chunk(bs)
+                            noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
+                            for n in range(len(noises)-2):
+                                noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
+                            # noise_un, noise_img, noise_txt = self.unet(...).sample.chunk(3)
+                            # noise_pred = noise_un + self.a.img_scale * (noise_img - noise_un) + cfg_scale * (noise_txt - noise_img)
+                        else:
+                            noises = self.unet(x, t, conds, **ukwargs).sample.chunk(bs) # pred noise residual at step t
+                            noise_pred = noises[0] # uncond
+                            for n in range(len(noises)-1):
+                                noise_pred = noise_pred + (noises[n+1] - noises[0]) * cfg_scale * cws[n % len(cws)] # prompt guidance
+                        return noise_pred
+
+                    def calc_cnet_batch(x, t, conds, cnimg):
+                        bcimg = cnimg.repeat(bs, 1, 1, 1) # bs repeat, frames interleave
+                        bconds = conds.repeat_interleave(x.shape[2], 0)
+                        bx = rearrange(x, 'b c f h w -> (b f) c h w' )
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.unet.to("cpu"); torch.cuda.empty_cache()
-                        ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, 1, return_dict=False)
-                        ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
-                        ctl_mid *= self.a.control_scale
-                        ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                        ctl_downs, ctl_mid = self.cnet(bx, t, bconds, bcimg, self.a.control_scale, return_dict=False)
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.cnet.to("cpu"); torch.cuda.empty_cache()
+                        return ctl_downs, ctl_mid
 
-                    def pred_noise(lat_, ukwargs={}):
-                        if len(lat_.shape)==5 and lat_.shape[2] > self.a.ctx_frames: # sliding sampling for long videos
-                            noise_pred_ = torch.zeros_like(lat_)
-                            slide_count = torch.zeros((1, 1, lat_.shape[2], 1, 1), device=lat_.device)
-                            for slids in uniform_slide(tnum, lat_.shape[2], ctx_size=self.a.ctx_frames, loop=self.a.loop):
-                                noise_pred_sub = self.unet(lat_[:,:,slids], t, conds, **ukwargs).sample
-                                noise_pred_[:,:,slids] += noise_pred_sub
+                    if len(lat_in.shape)==4: # unet2D [b,c,h,w]
+                        if self.use_cnet and cnimg is not None: # controlnet = max 960x640 or 768 on 16gb
+                            if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                                self.unet.to("cpu"); torch.cuda.empty_cache()
+                            ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, self.a.control_scale, return_dict=False)
+                            ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                            if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                                self.cnet.to("cpu"); torch.cuda.empty_cache()
+                        noise_pred = calc_noise(lat_in, t, conds, ukwargs)
+
+                    else: # unet3D [b,c,f,h,w]
+                        frames = lat_in.shape[2]
+                        if frames > self.a.ctx_frames: # sliding sampling for long videos
+                            noise_pred = torch.zeros_like(lat)
+                            slide_count = torch.zeros((1, 1, lat_in.shape[2], 1, 1), device=lat_in.device)
+                            for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
+                                if self.use_cnet and cnimg is not None: # controlnet
+                                    ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds, cnimg[slids])
+                                    ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                                noise_pred_sub = calc_noise(lat_in[:,:,slids], t, conds, ukwargs)
+                                noise_pred[:,:,slids] += noise_pred_sub
                                 slide_count[:,:,slids] += 1  # increment which indices were used
-                            noise_pred_ /= slide_count
-                        else:
-                            noise_pred_ = self.unet(lat_, t, conds, **ukwargs).sample
-                        return noise_pred_
+                            noise_pred /= slide_count
 
-                    if cfg_scale in [0, 1]:
-                        noise_pred = pred_noise(lat_in, ukwargs)
-                    elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
-                        noises = pred_noise(torch.cat([lat_in, ilat], dim=1)).chunk(bs)
-                        noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
-                        for n in range(len(noises)-2):
-                            noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
-                    else:
-                        noises = pred_noise(lat_in, ukwargs).chunk(bs) # pred noise residual at step t
-                        noise_pred = noises[0] # uncond
-                        for n in range(len(noises)-1):
-                            noise_pred = noise_pred + (noises[n+1] - noises[0]) * cfg_scale * cws[n % len(cws)] # prompt guidance
+                        else: # single context video
+                            if self.use_cnet and cnimg is not None: # controlnet
+                                ctl_downs, ctl_mid = calc_cnet_batch(lat_in, t, conds, cnimg)
+                                ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                            noise_pred = calc_noise(lat_in, t, conds, ukwargs)
 
                     if self.a.sampler == 'lcm':
                         lat, latend = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs, return_dict=False)

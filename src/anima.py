@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from core.sdsetup import SDfu
 from core.args import main_args, samplers, unprompt
 from core.text import multiprompt, txt_clean
-from core.utils import load_img, basename, progbar, save_cfg, calc_size, isset
+from core.utils import img_list, load_img, basename, progbar, save_cfg, calc_size, isset
 
 def get_args(parser):
     parser.add_argument('-iv', '--in_vid',  default=None, help='input video or frame sequence (directory with images)')
@@ -53,7 +53,7 @@ def main():
             frames = imageio.mimread(a.in_vid, memtest=False)
         if isset(a, 'frames'): frames = frames[:a.frames]
         a.frames = len(frames)
-        video = torch.from_numpy(np.stack(frames)).permute(0,3,1,2) / 127.5 - 1. # [f,c,h,w]
+        video = torch.from_numpy(np.stack(frames)).permute(0,3,1,2).cuda().half() / 127.5 - 1. # [f,c,h,w]
         if not isset(a, 'size'): a.size = list(video.shape[:-3:-1]) # last 2 reverted
     else:
         if not isset(a, 'size'): a.size = [sd.res]
@@ -69,6 +69,18 @@ def main():
         img_refs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
         gendict['c_img'] = sd.img_c([load_img(im, tensor=False)[0] for im in img_refs]) # all images at once
 
+    if sd.use_cnet and isset(a, 'control_img'):
+        assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
+        if os.path.isdir(a.control_img):
+            cn_imgs = [imageio.imread(path) for path in img_list(a.control_img)][:a.frames]
+            assert len(cn_imgs) == a.frames, "!! Not enough ControlNet images: %d, total frame count %d !!" % (len(cn_imgs), a.frames)
+        else: 
+            cn_imgs = [imageio.imread(a.control_img)] * a.frames
+        cn_imgs = torch.from_numpy(np.stack(cn_imgs)).cuda().half().permute(0,3,1,2) / 255. # [0..1] [f,c,h,w]
+        if list(cn_imgs.shape[-2:]) != [H, W]:
+            cn_imgs = F.interpolate(cn_imgs, (H, W), mode='bicubic', align_corners=True)
+        gendict['cnimg'] = cn_imgs
+
     def genmix(z_, cs, cws, **gendict):
         if a.cguide: # use noise lerp with cfg scaling (slower)
             video = sd.generate(z_, cs, uc, cws=cws, **gendict)
@@ -83,7 +95,8 @@ def main():
         name = '%03d-%s-%d' % (n, txt_clean(texts[n]), sd.seed)
         if isset(a, 'in_vid'):
             name = basename(a.in_vid) + '-' + name
-            video = F.interpolate(video.cuda(), (H, W), mode='bicubic', align_corners=True)
+            if list(video.shape[-2:]) != [H, W]:
+                video = F.interpolate(video, (H, W), mode='bicubic', align_corners=True)
             sd.set_steps(a.steps, a.strength)
             z_ = sd.img_z(video) # [f,c,h,w]
             z_ = z_.permute(1,0,2,3)[None,:] # [1,c,f,h,w]
