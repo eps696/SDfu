@@ -1,8 +1,9 @@
 transformers
-diffusers
+git+https://github.com/huggingface/diffusers
 git+https://github.com/openai/CLIP
 torchmetrics
 accelerate
+peft
 
 imageio-ffmpeg
 easydict

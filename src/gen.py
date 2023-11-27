@@ -37,6 +37,11 @@ def main():
     uc = multiprompt(sd, a.unprompt)[0][0]
     count = len(csb)
 
+    if isset(a, 'img_ref'):
+        assert os.path.exists(a.img_ref), "!! Image ref %s not found !!" % a.img_ref
+        img_refs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
+        img_conds = [sd.img_c(load_img(im, tensor=False)[0]) for im in img_refs] # every image separately
+
     if isset(a, 'in_img'):
         assert os.path.exists(a.in_img), "!! Image(s) %s not found !!" % a.in_img
         img_paths = img_list(a.in_img) if os.path.isdir(a.in_img) else [a.in_img]
@@ -44,12 +49,11 @@ def main():
     if isset(a, 'mask'):
         masks = img_list(a.mask) if os.path.isdir(a.mask) else read_txt(a.mask)
 
-    cdict = {} # for controlnet
-    cimgs = []
+    cn_imgs = []
     if sd.use_cnet and isset(a, 'control_img'):
         assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
-        cimgs = img_list(a.control_img) if os.path.isdir(a.control_img) else [a.control_img]
-        count = max(count, len(cimgs))
+        cn_imgs = img_list(a.control_img) if os.path.isdir(a.control_img) else [a.control_img]
+        count = max(count, len(cn_imgs))
 
     def genmix(z_, cs, cws, **gendict):
         if a.cguide: # use noise lerp with cfg scaling (slow!)
@@ -64,6 +68,9 @@ def main():
         gendict = {}
         log = texts[i % len(texts)][:80] if len(texts) > 0 else ''
 
+        if isset(a, 'img_ref'):
+            gendict['c_img'] = img_conds[i % len(img_conds)]
+
         if isset(a, 'in_img'):
             img_path = img_paths[i % len(img_paths)]
             file_out = basename(img_path) if len(img_paths) == count else '%06d' % i
@@ -71,11 +78,11 @@ def main():
             if len(img_paths) > 1 or i==0:
                 init_image, (W,H) = load_img(img_path, size)
                 if sd.depthmod:
-                    gendict = sd.prep_depth(init_image)
+                    gendict = {**gendict, **sd.prep_depth(init_image)}
                     z_ = sd.img_z(init_image)
                 elif isset(a, 'mask'): # inpaint
                     log += ' / %s' % os.path.basename(masks[i % len(masks)])
-                    gendict = sd.prep_mask(masks[i % len(masks)], img_path, init_image)
+                    gendict = {**gendict, **sd.prep_mask(masks[i % len(masks)], img_path, init_image)}
                     z_ = sd.rnd_z(H, W) if sd.inpaintmod else sd.img_z(init_image)
                 elif isset(a, 'img_scale'): # instruct pix2pix
                     ilat = sd.img_lat(init_image) / sd.vae.config.scaling_factor
@@ -89,10 +96,10 @@ def main():
             W, H = [sd.res]*2 if size is None else size
             z_ = sd.rnd_z(H, W)
 
-        if len(cimgs) > 0:
-            cdict['cimg'] = (load_img(cimgs[i % len(cimgs)], (W,H))[0] + 1) / 2
+        if len(cn_imgs) > 0:
+            gendict['cnimg'] = (load_img(cn_imgs[i % len(cn_imgs)], (W,H))[0] + 1) / 2
 
-        images = genmix(z_, csb[i % len(csb)], cwb[i % len(cwb)], **cdict, **gendict)
+        images = genmix(z_, csb[i % len(csb)], cwb[i % len(cwb)], **gendict)
 
         postfix = a.load_custom or a.load_lora or a.load_token
         if postfix is not None: file_out += '-%s' % basename(postfix)

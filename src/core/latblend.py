@@ -97,11 +97,11 @@ class LatentBlending():
         self.cws = cws
         self.uc = uc
 
-    def init_lats(self, lat1, lat2, cimg=None, **kwargs):
+    def init_lats(self, lat1, lat2, cnimg=None, **kwargs):
         self.branch1_cross_power = 0. # to keep initial latents intact
         self.lat_init1 = lat1
         self.lat_init2 = lat2
-        self.cimg      = cimg
+        self.cnimg     = cnimg
 
     def run_transition(self, w, h, depth_strength=0.4, t_compute_max=None, max_branches=None, reuse=False, seeds=None):
         """ Function for computing transitions. Returns a list of transition images using spherical latent blending.
@@ -445,8 +445,8 @@ class LatentBlending():
                 lat_in = torch.cat([lat] * bs)
 
                 ukwargs = {}
-                if self.sd.use_cnet and self.cimg is not None:
-                    ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cimg, 1, return_dict=False)
+                if self.sd.use_cnet and self.cnimg is not None:
+                    ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cnimg, 1, return_dict=False)
                     ctl_downs = [ctl_down * self.sd.a.control_scale for ctl_down in ctl_downs]
                     ctl_mid *= self.sd.a.control_scale
                     ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}

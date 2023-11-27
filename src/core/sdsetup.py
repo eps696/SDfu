@@ -31,9 +31,12 @@ except: iscolab = False
 device = torch.device('cuda')
 
 class SDpipe(StableDiffusionPipeline):
-    def __init__(self, vae, text_encoder, tokenizer, unet, scheduler, safety_checker=None, feature_extractor=None, requires_safety_checker=False):
-        super().__init__(vae, text_encoder, tokenizer, unet, scheduler, None, None, requires_safety_checker=False)
+    def __init__(self, vae, text_encoder, tokenizer, unet, scheduler, image_encoder=None, \
+                 safety_checker=None, feature_extractor=None, requires_safety_checker=False):
+        super().__init__(vae, text_encoder, tokenizer, unet, scheduler, image_encoder, None, None, requires_safety_checker=False)
         self.register_modules(vae=vae, text_encoder=text_encoder, tokenizer=tokenizer, unet=unet, scheduler=scheduler)
+        if image_encoder is not None:
+            self.register_modules(image_encoder=image_encoder)
 
 class ModelWrapper: # for k-sampling
     def __init__(self, model, alphas_cumprod):
@@ -57,7 +60,7 @@ class SDfu:
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
 
-        if a.model.lower() == 'lcm':
+        if a.model == 'lcm':
             a.model = os.path.join(a.maindir, 'lcm')
             self.a.sampler = 'lcm'
             if self.a.cfg_scale > 3: self.a.cfg_scale = 2
@@ -73,7 +76,8 @@ class SDfu:
         # load finetuned stuff
         mod_tokens = None
         if isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
-            self.pipe.load_lora_weights(a.load_lora)
+            self.pipe.load_lora_weights(a.load_lora, low_cpu_mem_usage=True)
+            self.pipe.fuse_lora()
             if a.verbose: print(' loaded LoRA', a.load_lora)
         elif isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
             from .finetune import load_delta, custom_diff
@@ -98,7 +102,7 @@ class SDfu:
             if a.verbose: print(' loaded ControlNet', a.control_mod)
         self.use_cnet = hasattr(self, 'cnet')
 
-        # load animatediff
+        # load animatediff = before ip adapter, after custom diffusion !
         if isset(a, 'animdiff'):
             if not os.path.exists(a.animdiff): a.animdiff = os.path.join(a.maindir, 'anima')
             assert os.path.exists(a.animdiff), "Not found AnimateDiff model %s" % a.animdiff
@@ -110,6 +114,16 @@ class SDfu:
             if not self.a.lowmem: self.unet.to(device)
             self.pipe.register_modules(unet = self.unet, motion_adapter = motion_adapter)
             if a.verbose: print(' loaded AnimateDiff', a.animdiff)
+
+        # load ip adapter = after animatediff !
+        if isset(a, 'img_ref'):
+            from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection as CLIPimg
+            self.image_preproc = CLIPImageProcessor.from_pretrained(os.path.join(a.maindir, 'image/preproc_config.json')) # openai/clip-vit-base-patch32
+            self.image_encoder = CLIPimg.from_pretrained(os.path.join(a.maindir, 'image'), torch_dtype=torch.float16).to(device)
+            self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.maindir, 'image/ip-adapter_sd15.bin'), map_location="cpu"))
+            self.pipe.register_modules(image_encoder = self.image_encoder)
+            self.pipe.set_ip_adapter_scale(a.imgref_weight)
+            if a.verbose: print(' loaded IP adapter for image encodings')
 
         self.final_setup(a)
 
@@ -208,7 +222,7 @@ class SDfu:
         return scheduler
 
     def final_setup(self, a):
-        if isxf: self.pipe.enable_xformers_memory_efficient_attention()
+        if isxf and not isset(a, 'img_ref'): self.pipe.enable_xformers_memory_efficient_attention() # !!! breaks ip adapter
         if isset(a, 'freeu'): self.pipe.unet.enable_freeu(s1=1.5, s2=1.6, b1=0.9, b2=0.2) # 2.1 1.4, 1.6, 0.9, 0.2, sdxl 1.3, 1.4, 0.9, 0.2
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
@@ -272,6 +286,11 @@ class SDfu:
         next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
         return next_sample
 
+    def img_c(self, images):
+        with self.run_scope('cuda'):
+            images = self.image_preproc(images, return_tensors="pt").pixel_values.to(device) # [N,3,224,224]
+            return self.image_encoder(images).image_embeds.mean(0, keepdim=True) # [1,1024]
+
     def img_lat(self, image, deterministic=False):
         with self.run_scope('cuda'):
             postr = self.vae.encode(image).latent_dist
@@ -279,13 +298,13 @@ class SDfu:
             lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
 
-    def ddim_inv(self, lat, cond, cimg=None): # ddim inversion, slower, ~exact
+    def ddim_inv(self, lat, cond, cnimg=None): # ddim inversion, slower, ~exact
         ukwargs = {}
         with self.run_scope('cuda'):
             for t in reversed(self.scheduler.timesteps):
                 with torch.no_grad():
-                    if self.use_cnet and cimg is not None: # controlnet
-                        ctl_downs, ctl_mid = self.cnet(lat, t, cond, cimg, 1, return_dict=False)
+                    if self.use_cnet and cnimg is not None: # controlnet
+                        ctl_downs, ctl_mid = self.cnet(lat, t, cond, cnimg, 1, return_dict=False)
                         ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
                         ctl_mid *= self.a.control_scale
                         ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
@@ -331,15 +350,19 @@ class SDfu:
         dd = 2. * (dd - depth_min) / (depth_max - depth_min) - 1.
         return {'depth': dd} # [1,1,64,64]
 
-    def generate(self, lat, cs, uc, cfg_scale=None, mask=None, masked_lat=None, depth=None, cws=None, cimg=None, ilat=None, offset=0, verbose=True):
+    def generate(self, lat, cs, uc, c_img=None, cfg_scale=None, cws=None, mask=None, masked_lat=None, depth=None, cnimg=None, ilat=None, offset=0, verbose=True):
         if cfg_scale is None: cfg_scale = self.a.cfg_scale
         with torch.no_grad(), self.run_scope('cuda'):
             if cws is None or not len(cws) == len(cs): cws = [1 / len(cs)] * len(cs)
             conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
             bs = len(conds) // self.a.batch
-            if cimg is not None: cimg = cimg.repeat_interleave(len(conds) // len(cimg), 0)
+            if cnimg is not None: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
+            if c_img is not None: 
+                uc_img = torch.zeros_like(c_img) # [1,1024]
+                img_conds = uc_img if cfg_scale==0 else c_img[:self.a.batch] if cfg_scale==1 else torch.cat([uc_img, c_img])
+                if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
             if self.a.sampler == 'lcm': # lcm scheduler requires reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
 
@@ -354,8 +377,11 @@ class SDfu:
 
                     x, t = torch.cat([x] * bs), torch.cat([t] * bs) # expand latents for guidance
 
-                    if self.use_cnet and cimg is not None: # controlnet = max 960x640 or 768 on 16gb
-                        ctl_downs, ctl_mid = self.cnet(x, t, conds, cimg, 1, return_dict=False)
+                    if c_img is not None: # encoded img for ip adapter
+                        ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
+
+                    if self.use_cnet and cnimg is not None: # controlnet = max 960x640 or 768 on 16gb
+                        ctl_downs, ctl_mid = self.cnet(x, t, conds, cnimg, 1, return_dict=False)
                         ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
                         ctl_mid *= self.a.control_scale
                         ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
@@ -405,10 +431,13 @@ class SDfu:
 
                     lat_in = torch.cat([lat_in] * bs) # expand latents for guidance
 
-                    if self.use_cnet and cimg is not None: # controlnet fits max 960x640 on 16gb vram
+                    if c_img is not None: # encoded img for ip adapter
+                        ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
+
+                    if self.use_cnet and cnimg is not None: # controlnet fits max 960x640 on 16gb vram
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.unet.to("cpu"); torch.cuda.empty_cache()
-                        ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cimg, 1, return_dict=False)
+                        ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, 1, return_dict=False)
                         ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
                         ctl_mid *= self.a.control_scale
                         ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}

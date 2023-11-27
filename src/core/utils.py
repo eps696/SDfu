@@ -108,6 +108,7 @@ def triblur(x, k=3, pow=1.0):
 
 def load_img(path, size=None, tensor=True):
     image = Image.open(path).convert('RGB')
+    if isinstance(size, int): size = [size,size]
     w, h = image.size if size is None else size
     w, h = map(lambda x: x - x % 8, (w, h))  # resize to integer multiple of 8
     resampl = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
@@ -115,7 +116,7 @@ def load_img(path, size=None, tensor=True):
     if not tensor: return image, (w,h)
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0,3,1,2)
-    image = torch.from_numpy(image).to(device)
+    image = torch.from_numpy(image).to(device, dtype=torch.float16)
     return 2.*image - 1., (w,h)
 
 def save_img(image, num, out_dir, prefix='', filepath=None):

@@ -84,7 +84,7 @@ def main():
     cdict = {} # for controlnet
     if sd.use_cnet and isset(a, 'control_img'):
         assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
-        cdict['cimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
+        cdict['cnimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
 
     glob_steps = count * a.fstep
     if a.astep is None: a.astep = a.fstep

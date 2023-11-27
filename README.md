@@ -4,18 +4,18 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/eps696/SDfu/blob/master/SDfu_colab.ipynb)
 
-This is yet another Stable Diffusion compilation, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) as a convenient production tool, or [Deforum] for precisely controlled animations.  
+This is yet another Stable Diffusion toolkit, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) as convenient production suites, or [ComfyUI] for node-based workflows.  
 
-The code is based on the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [k-diffusion](https://github.com/crowsonkb/k-diffusion), [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
-There is also a [similar repo](https://github.com/eps696/SD) (kinda obsolete now), based on the [CompVis] and [Stability AI] libraries.  
+The toolkit is built on top of the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [k-diffusion](https://github.com/crowsonkb/k-diffusion), [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
+There was also a [similar repo](https://github.com/eps696/SD) (abandoned now), based on the [CompVis] and [Stability AI] libraries.  
 
 Current functions:
-* Text to image
-* Image re- and in-painting
+* Text to image, with possible prompting **by reference images** via [IP adapter]
+* Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * **Smooth & stable video edit** with [TokenFlow]
-* Text to video with [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
+* Text to video with **[AnimateDiff]** and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
 
 Fine-tuning with your images:
@@ -45,7 +45,7 @@ pip install xformers
 NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
 
 Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff], [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff], [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [IP adapter] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
@@ -89,10 +89,13 @@ Check other options and their shortcuts by running these scripts with `--help` o
 
 There are also few Windows bat-files, slightly simplifying and automating the commands. 
 
-### Prompts structure 
+### Prompts 
 
 Text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
-More radical blending can be achieved with multiguidance technique, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
+More radical blending can be achieved with **multiguidance technique**, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
+
+It's possible also to use **reference images** as prompts by providing the path with `--img_ref ..` option. If it's a directory, single generations or interpolations will pick the files one by one, while video generation will consume them all at once.  
+*NB: WIP, for now only single generation and AnimateDiff supported.*
 
 
 ## Guide synthesis with [ControlNet] or [Instruct pix2pix]
@@ -248,3 +251,4 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>
 [Potat]: <https://huggingface.co/camenduru/potat1>
 [ComfyUI]: <https://github.com/comfyanonymous/ComfyUI>
+[IP adapter]: <https://huggingface.co/h94/IP-Adapter>

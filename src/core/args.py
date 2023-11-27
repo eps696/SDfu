@@ -15,6 +15,8 @@ def main_args():
     parser.add_argument('-pre', '--pretxt', default='', help='Prefix for input text')
     parser.add_argument('-post','--postxt', default='', help='Postfix for input text')
     parser.add_argument('-im', '--in_img',  default=None, help='input image or directory with images (overrides width and height)')
+    parser.add_argument('-ir', '--img_ref',  default=None, help='Reference image or directory with images (overrides width and height)')
+    parser.add_argument('-iw', '--imgref_weight', default=0.5, type=float, help='Weight for the reference image(s), relative to the text prompt')
     parser.add_argument('-M',  '--mask',    default=None, help='Path to input mask for inpainting mode (overrides width and height)')
     parser.add_argument('-un','--unprompt', default=None, help='Negative prompt to be used as a neutral [uncond] starting point')
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
@@ -38,7 +40,7 @@ def main_args():
     parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file")
     # controlnet
     parser.add_argument('-cmod', '--control_mod', default=None, help="path to the ControlNet model")
-    parser.add_argument('-cimg', '--control_img', default=None, help="path to the ControlNet driving image (contour, pose, etc)")
+    parser.add_argument('-cnimg','--control_img', default=None, help="path to the ControlNet driving image (contour, pose, etc)")
     parser.add_argument('-cts', '--control_scale', default=0.7, type=float, help="ControlNet effect scale")
     # misc
     parser.add_argument('-cg', '--cguide',  action='store_true', help='Use noise guidance for interpolation, instead of cond lerp')

@@ -43,6 +43,9 @@ def main():
     # print(' downloading SD 2-depth model Unet & depth')
     # get_model("https://www.dropbox.com/s/4visx4qcscirvob/sdfu-v2d-unet-fp16.zip?dl=1", 'models/v2')
 
+    print(' downloading IP adapter & CLIPVision models')
+    get_model("https://www.dropbox.com/s/ht7qbruw6mxz8le/sdfu-imageenc-fp16.zip?dl=1", 'models')
+
     print(' downloading LCM few-steps model')
     get_model("https://www.dropbox.com/s/3sql6gsjmtvw2zo/sdfu-lcm-fp16.zip?dl=1", 'models')
 
