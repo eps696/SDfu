@@ -137,7 +137,7 @@ def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, tensor=Tru
     if invert_mask: mask = ImageOps.invert(mask)
     if not tensor: return mask
     mask = np.array(mask).astype(np.float32) / 255.0
-    mask = torch.from_numpy(mask[None][None]).to(device)
+    mask = torch.from_numpy(mask[None][None]).to(device, dtype=torch.float16)
     return mask
 
 def unique_prefix(out_dir):

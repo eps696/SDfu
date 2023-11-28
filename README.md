@@ -117,7 +117,7 @@ python src/latwalk.py --control_mod canny --control_img _in/canny/something.jpg 
 ```
 also with pan/zoom recursion:
 ```
-python src/recur.py -cmod canny -cimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02 -m 15drm
+python src/recur.py -cmod canny -cnimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02 -m 15drm
 ```
 
 ### More ways to edit images 
@@ -213,7 +213,7 @@ Unsupported (yet): latent blending, multi guidance, fine-tuning, weighted prompt
 NB: The models (~8gb total) are auto-downloaded on the first use; you may download them yourself and set the path with `--models_dir ...` option.  
 As an example, interpolate with ControlNet:
 ```
-python src/sdxl.py -v -t yourfile.txt -cimg _in/something.jpg -cmod depth -cts 0.6 --size 1280-768 -fs 5
+python src/sdxl.py -v -t yourfile.txt -cnimg _in/something.jpg -cmod depth -cts 0.6 --size 1280-768 -fs 5
 ```
 
 ## Special model: Kandinsky 2.2
@@ -222,7 +222,7 @@ Another interesting model is [Kandinsky] 2.2, featuring txt2img, img2img, inpain
 NB: The models (heavy!) are auto-downloaded on the first use; you may download them yourself and set the path with `--models_dir ...` option.  
 As an example, interpolate with ControlNet:
 ```
-python src/kand.py -v -t yourfile.txt -cimg _in/something.jpg -cts 0.6 --size 1280-720 -fs 5
+python src/kand.py -v -t yourfile.txt -cnimg _in/something.jpg -cts 0.6 --size 1280-720 -fs 5
 ```
 
 ## Credits

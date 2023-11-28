@@ -63,7 +63,7 @@ class SDfu:
 
         if a.model == 'lcm':
             a.model = os.path.join(a.maindir, 'lcm')
-            self.a.sampler = 'lcm'
+            self.a.sampler = 'orig'
             if self.a.cfg_scale > 3: self.a.cfg_scale = 2
             if self.a.steps > 8: self.a.steps = 4
 
@@ -191,10 +191,11 @@ class SDfu:
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
         if not os.path.exists(sched_path):
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
+        print(sched_path)
         self.sched_kwargs = {}
         if a.sampler == 'lcm':
             from diffusers.schedulers import LCMScheduler
-            scheduler = LCMScheduler.from_pretrained(sched_path)
+            scheduler = LCMScheduler.from_pretrained(os.path.join(a.maindir, 'lcm/scheduler/scheduler_config.json'))
         elif a.sampler == 'pndm':
             from diffusers.schedulers import PNDMScheduler
             scheduler = PNDMScheduler.from_pretrained(sched_path)
@@ -295,7 +296,7 @@ class SDfu:
 
     def img_lat(self, image, deterministic=False):
         with self.run_scope('cuda'):
-            postr = self.vae.encode(image).latent_dist
+            postr = self.vae.encode(image.half()).latent_dist
             lats = postr.mean if deterministic else postr.sample()
             lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
@@ -336,9 +337,10 @@ class SDfu:
         image_pil, _ = load_img(img_path, tensor=False)
         if init_image is None:
             init_image, (W,H) = load_img(img_path)
-        mask = makemask(mask_str, image_pil, self.a.invert_mask, model_path=self.clipseg_path)
-        masked_lat = self.img_lat(init_image * mask)
-        mask = F.interpolate(mask, size = masked_lat.shape[-2:], mode="bicubic", align_corners=False)
+        with self.run_scope('cuda'):
+            mask = makemask(mask_str, image_pil, self.a.invert_mask, model_path=self.clipseg_path)
+            masked_lat = self.img_lat(init_image * mask)
+            mask = F.interpolate(mask, size = masked_lat.shape[-2:], mode="bicubic", align_corners=False)
         return {'masked_lat': masked_lat, 'mask': mask} # [1,3,64,64], [1,1,64,64]
 
     def prep_depth(self, init_image):
@@ -365,7 +367,7 @@ class SDfu:
                 uc_img = torch.zeros_like(c_img) # [1,1024]
                 img_conds = uc_img if cfg_scale==0 else c_img[:self.a.batch] if cfg_scale==1 else torch.cat([uc_img, c_img])
                 if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
-            if self.a.sampler == 'lcm': # lcm scheduler requires reset on every generation
+            if self.a.sampler == 'lcm' or self.a.model == ('lcm'): # lcm scheduler requires reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
 
             if self.use_kdiff:
@@ -441,8 +443,6 @@ class SDfu:
                             noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
                             for n in range(len(noises)-2):
                                 noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
-                            # noise_un, noise_img, noise_txt = self.unet(...).sample.chunk(3)
-                            # noise_pred = noise_un + self.a.img_scale * (noise_img - noise_un) + cfg_scale * (noise_txt - noise_img)
                         else:
                             noises = self.unet(x, t, conds, **ukwargs).sample.chunk(bs) # pred noise residual at step t
                             noise_pred = noises[0] # uncond
@@ -521,7 +521,7 @@ class SDfu:
             return output
 
 
-# !!! sliding sampling for long videos
+# sliding sampling for long videos
 # from https://github.com/ArtVentureX/comfyui-animatediff/blob/main/animatediff/sliding_schedule.py
 def ordered_halving(val, verbose=False): # Returns fraction that has denominator that is a power of 2
     bin_str = f"{val:064b}" # get binary value, padded with 0s for 64 bits
