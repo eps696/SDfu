@@ -191,7 +191,6 @@ class SDfu:
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
         if not os.path.exists(sched_path):
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
-        print(sched_path)
         self.sched_kwargs = {}
         if a.sampler == 'lcm':
             from diffusers.schedulers import LCMScheduler
@@ -508,7 +507,7 @@ class SDfu:
             lat /= self.vae.config.scaling_factor
 
             if len(lat.shape)==5: # video
-                lat = lat.permute(0,2,1,3,4).squeeze(0) # [f,c,h,w]
+                lat = lat.permute(0,2,1,3,4).squeeze(0).half() # [f,c,h,w]
                 output = torch.cat([self.vae.decode(lat[b : b + self.a.vae_batch]).sample.float().cpu() for b in range(0, len(lat), self.a.vae_batch)])
                 output = output[None,:].permute(0,2,1,3,4) # [1,c,f,h,w]
             else: # image
