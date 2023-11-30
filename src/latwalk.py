@@ -30,6 +30,7 @@ def main():
     if a.latblend > 0: assert a.sampler in ['ddim', 'euler'], "Latent blending works only with euler or ddim samplers"
 
     sd = SDfu(a)
+    a = sd.a
 
     a.model = basename(a.model)
     a.seed = sd.seed

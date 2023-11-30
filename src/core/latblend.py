@@ -9,6 +9,7 @@ import warnings
 warnings.filterwarnings('ignore')
 from PIL import Image
 import yaml
+from contextlib import nullcontext
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 import lpips
@@ -374,8 +375,11 @@ class LatentBlending():
         if np.sum(list_mixing_coeffs) > 0:
             assert len(lats_mixing) == self.steps
 
-        self.precision_scope = torch.autocast
-        with self.precision_scope("cuda"):
+        if self.sd.a.model == 'lcm': # lcm scheduler requires reset on every generation
+            self.sd.set_steps(self.sd.a.steps, self.sd.a.strength)
+
+        self.run_scope = nullcontext
+        with self.run_scope("cuda"):
             # Collect latents
             lat = lat_start.clone()
             lats_out = []
@@ -404,7 +408,7 @@ class LatentBlending():
             return lats_out
 
     def euler_step(self, lat, cond, sigmas, i, verbose=True):
-        with self.precision_scope("cuda"):
+        with self.run_scope("cuda"):
             sigma = sigmas[i]
             t = sigma * lat.new_ones([lat.shape[0]])
             if self.cfg_scale > 0:
@@ -431,7 +435,7 @@ class LatentBlending():
         return lat
 
     def ddim_step(self, lat, cond, t, verbose=True):
-        with self.precision_scope("cuda"):
+        with self.run_scope("cuda"):
             lat = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers!?
             if self.cfg_scale > 0:
                 if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
@@ -459,7 +463,7 @@ class LatentBlending():
                 # noise_pred = noise_un + (noise_c1 * (1.-mix) + noise_c2 * mix - noise_un) * self.cfg_scale # single cond
             else: # no guidance, no controlnet
                 noise_pred = self.sd.unet(lat, t, self.uc).sample
-            lat = self.sd.scheduler.step(noise_pred.cpu(), t, lat.cpu(), **self.sd.sched_kwargs).prev_sample.cuda().half() # why can't make it on cuda??
+            lat = self.sd.scheduler.step(noise_pred, t, lat, **self.sd.sched_kwargs).prev_sample.cuda().half()
         return lat
 
     def get_noise(self, seed):

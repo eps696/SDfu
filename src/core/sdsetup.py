@@ -66,6 +66,7 @@ class SDfu:
             self.a.sampler = 'orig'
             if self.a.cfg_scale > 3: self.a.cfg_scale = 2
             if self.a.steps > 8: self.a.steps = 4
+        self.use_lcm = self.a.model=='lcm'
 
         if a.model in models:
             self.load_model_custom(self.a, vae, text_encoder, tokenizer, unet, scheduler)
@@ -265,7 +266,7 @@ class SDfu:
         self.g_ = torch.Generator("cuda").manual_seed(self.seed)
     
     def set_steps(self, steps, strength=1., warmup=1, device=device):
-        if self.a.sampler == 'lcm':
+        if self.use_lcm:
             self.scheduler.set_timesteps(steps, device, strength=strength)
             self.timesteps = self.scheduler.timesteps
             self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
@@ -366,7 +367,7 @@ class SDfu:
                 uc_img = torch.zeros_like(c_img) # [1,1024]
                 img_conds = uc_img if cfg_scale==0 else c_img[:self.a.batch] if cfg_scale==1 else torch.cat([uc_img, c_img])
                 if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
-            if self.a.sampler == 'lcm' or self.a.model == ('lcm'): # lcm scheduler requires reset on every generation
+            if self.use_lcm: # lcm scheduler requires reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
 
             if self.use_kdiff:
@@ -490,14 +491,14 @@ class SDfu:
                                 ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                             noise_pred = calc_noise(lat_in, t, conds, ukwargs)
 
-                    if self.a.sampler == 'lcm':
+                    if self.use_lcm:
                         lat, latend = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs, return_dict=False)
                     else:
                         lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
 
                     if verbose and not iscolab: pbar.upd()
 
-            if self.a.sampler == 'lcm':
+            if self.use_lcm:
                 lat = latend
 
             if isok(mask, masked_lat) and not self.inpaintmod: # inpaint with standard models
