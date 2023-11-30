@@ -61,12 +61,13 @@ class SDfu:
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
 
+        self.use_lcm = False
         if a.model == 'lcm':
+            self.use_lcm = True
             a.model = os.path.join(a.maindir, 'lcm')
             self.a.sampler = 'orig'
             if self.a.cfg_scale > 3: self.a.cfg_scale = 2
-            if self.a.steps > 8: self.a.steps = 4
-        self.use_lcm = self.a.model=='lcm'
+            if self.a.steps > 12: self.a.steps = 4 # if steps are still set for ldm schedulers
 
         if a.model in models:
             self.load_model_custom(self.a, vae, text_encoder, tokenizer, unet, scheduler)

@@ -198,11 +198,14 @@ You can also run `python src/latwalk.py ...` with finetuned weights to make anim
 
 ## Special model: LCM
 
-One of the most impressive recent discoveries is a Latent Consistency Model ([LCM]) architecture. It replaces regular diffusion part by a more direct latent prediction with distilled model, and requires only 2~4 steps to run. Not tested for compatibility with the features above yet.  
-Example of usage:
+One of the most impressive recent discoveries is a Latent Consistency Model ([LCM]) architecture. It replaces regular diffusion part by a more direct latent prediction with distilled model, and requires only 2~4 steps to run. Supported only for image generation (not for video!).  
+Examples of usage:
 ```
 python src/gen.py -m lcm -t "hello world"
-python src/gen.py -m lcm -im _in/pix -t "neon light glow" -f 0.4
+python src/gen.py -m lcm -im _in/pix -t "neon light glow" -f 0.5
+python src/gen.py -m lcm -cmod depth -cnimg _in/depth/something.jpg -im _in/something.jpg -t "neon glow steampunk" -f 1
+python src/latwalk.py -m lcm -t yourfile.txt
+python src/latwalk.py -m lcm -t yourfile.txt -lb 0.75 -s 8
 ```
 
 ## Special model: SDXL
