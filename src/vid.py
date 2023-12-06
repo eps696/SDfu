@@ -97,7 +97,7 @@ def main():
     if a.in_vid is not None and os.path.exists(a.in_vid):
         videolist = file_list(a.in_vid) if os.path.isdir(a.in_vid) else [a.in_vid]
         for path in videolist:
-            video = torch.from_numpy(np.stack(imageio.mimread(path))).permute(0,3,1,2) # [f,c,h,w]
+            video = torch.from_numpy(np.stack(imageio.mimread(path, memtest=False))).permute(0,3,1,2) # [f,c,h,w]
             videoin += [video / 127.5 - 1.]
 
     # Lo res
