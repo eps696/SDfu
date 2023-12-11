@@ -12,20 +12,7 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-try: # diffusers 0.14
-    from diffusers.models.attention import CrossAttention as Attention
-    from diffusers.models.cross_attention import LoRACrossAttnProcessor as LoRAAttnProcessor
-    try:
-        import xformers
-    except: pass
-except: # diffusers 0.15+
-    from diffusers.models.attention_processor import Attention
-    try:
-        import xformers
-        from diffusers.models.attention_processor import LoRAXFormersAttnProcessor as LoRAAttnProcessor
-    except:
-        from diffusers.models.attention_processor import LoRAAttnProcessor
-from diffusers.loaders import AttnProcsLayers
+from diffusers.models.attention_processor import Attention
 
 PIL_INTERPOLATION = PIL.Image.Resampling.BICUBIC if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0") else PIL.Image.BICUBIC
 
@@ -65,7 +52,7 @@ class Capturer():
         }
         model_path = CAPTION_MODELS['blip-base'] # 'blip-large' is too imaginative
         model = BlipForConditionalGeneration.from_pretrained(model_path, torch_dtype=self.dtype) # Blip2ForConditionalGeneration
-        self.processor = AutoProcessor.from_pretrained(model_path)
+        self.processor = AutoProcessor.from_pretrained(model_path, do_rescale=False)
         self.model = model.eval().to(self.device)
 
     def __call__(self, image):
@@ -274,29 +261,6 @@ class CustomDiffusionXFormersAttnProcessor:
         hidden_states = attn.to_out[0](hidden_states) # linear proj
         hidden_states = attn.to_out[1](hidden_states) # dropout
         return hidden_states
-
-# # # # # # # # # LoRA # # # # # # # # # 
-
-def prep_lora(unet):
-    # attention processors => 32 layers
-    # 3x down blocks * 2x attn layers * 2x transformer layers = 12
-    # 1x mid blocks  * 2x attn layers * 1x transformer layers = 2
-    # 3x up blocks   * 2x attn layers * 3x transformer layers = 18
-    lora_attn_procs = {}
-    for name in unet.attn_processors.keys():
-        cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-        if name.startswith("mid_block"):
-            hidden_size = unet.config.block_out_channels[-1]
-        elif name.startswith("up_blocks"):
-            block_id = int(name[len("up_blocks.")])
-            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-        elif name.startswith("down_blocks"):
-            block_id = int(name[len("down_blocks.")])
-            hidden_size = unet.config.block_out_channels[block_id]
-        lora_attn_procs[name] = LoRAAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim).to(unet.device, dtype=unet.dtype)
-    unet.set_attn_processor(lora_attn_procs)
-    lora_layers = AttnProcsLayers(unet.attn_processors)
-    return unet, lora_layers
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 

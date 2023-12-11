@@ -6,8 +6,8 @@ from shutil import move
 import torch
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dir", '-d', default='./', help="directory with models")
-parser.add_argument("--ext", '-e', default=['ckpt','pt', 'bin'], help="model extensions")
+parser.add_argument("--input", '-i', default='./', help="file or directory with models")
+parser.add_argument("--ext", '-e', default=['ckpt','pt', 'bin','safetensors'], help="model extensions")
 a = parser.parse_args()
 
 def basename(file):
@@ -29,18 +29,27 @@ def float2half(data):
         if isinstance(data[k], collections.abc.Mapping):
             data[k] = float2half(data[k])
         elif isinstance(data[k], list):
-            data[k] = [float2half(x) for x in data[k]]
+            data[k] = [float2half(x) for x in data[k] if not isinstance(x, int)]
         else:
             if data[k] is not None and torch.is_tensor(data[k]) and data[k].type() in ['torch.FloatTensor', 'torch.cuda.FloatTensor']:
                 data[k] = data[k].half()
     return data
 
-models = file_list(a.dir, a.ext)
+models = [a.input] if os.path.isfile(a.input) else file_list(a.input, a.ext)
+
+if any(['safetensors' in f for f in models]):
+    import safetensors.torch as safe
 
 for model_path in models:
-    model = torch.load(model_path)
+    issafe = '.safetensors' in model_path.lower()
+    model = safe.load_file(model_path) if issafe else torch.load(model_path)
+
     model = float2half(model)
+
     file_bak = basename(model_path) + '-full' + os.path.splitext(model_path)[-1]
     move(model_path, file_bak)
-    torch.save(model, model_path)
+    if issafe:
+        safe.save_file(model, model_path)
+    else:
+        torch.save(model, model_path)
 

@@ -17,8 +17,10 @@ import transformers
 transformers.utils.logging.set_verbosity_warning()
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import StableDiffusionPipeline, AutoencoderKL, UNet2DConditionModel, DDIMScheduler
+from peft import LoraConfig
+from peft.utils import get_peft_model_state_dict
 
-from core.finetune import FinetuneDataset, custom_diff, prep_lora, save_delta, load_delta, save_embeds
+from core.finetune import FinetuneDataset, custom_diff, save_delta, load_delta, save_embeds
 from core.utils import save_img, save_cfg, isset, progbar, basename
 
 import warnings
@@ -47,6 +49,7 @@ parser.add_argument('-xf', '--xformers', action='store_true', help="Try to use x
 parser.add_argument('-val', '--validate', action='store_true', help="Save test samples during training")
 parser.add_argument('-lo', '--low_mem', action='store_true', help="Use gradient checkpointing: less memory, slower training")
 parser.add_argument('--freeze_model',   default='crossattn_kv', help="set 'crossattn' to enable fine-tuning of all key, value, query matrices")
+parser.add_argument(       '--rank',    default=4, type=int, help="The dimension of the LoRA update matrices.")
 parser.add_argument('-lr', '--lr',      default=1e-5, type=float, help="Initial learning rate") # 1e-3 ~ 5e-4 for text inv, 1e-4 for lora
 parser.add_argument('--scale_lr',       default=True, help="Scale learning rate by batch")
 parser.add_argument('-S',  '--seed',    default=None, type=int, help="A seed for reproducible training.")
@@ -158,9 +161,10 @@ def main():
     else:
         text_encoder.to(dtype=weight_dtype).requires_grad_(False)
     if a.type=='lora':
-        unet, lora_layers = prep_lora(unet)
         unet.requires_grad_(False)
-        lora_layers.requires_grad_(True)
+        unet_lora_config = LoraConfig(r=a.rank, init_lora_weights="gaussian", target_modules=["to_k", "to_q", "to_v", "to_out.0"])
+        unet.add_adapter(unet_lora_config)
+        lora_params = filter(lambda p: p.requires_grad, unet.parameters())
         unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
     elif a.type=='text':
         unet.requires_grad_(False)
@@ -172,7 +176,7 @@ def main():
     unet.to(dtype=unet_dtype)
     text_encoder.to(dtype=torch.float32) # !!! must be trained as float32 + avoiding q/k/v mistype error at lora validation
 
-    if a.xformers is True and a.type != 'lora':
+    if a.xformers is True:
         try:
             import xformers
             unet.enable_xformers_memory_efficient_attention()
@@ -192,7 +196,7 @@ def main():
     if a.type == 'text': # text inversion: only new embedding(s)
         params_to_optimize = text_encoder.get_input_embeddings().parameters()
     elif a.type == 'lora':
-        params_to_optimize = lora_layers.parameters()
+        params_to_optimize = lora_params
     elif a.freeze_model == 'crossattn': # custom: embeddings & unet attention all
         params_to_optimize = itertools.chain(text_encoder.get_input_embeddings().parameters(), 
                                              [x[1] for x in unet.named_parameters() if 'attn2' in x[0]])
@@ -255,11 +259,11 @@ def main():
                     save_delta(save_path, unet, text_encoder, mod_tokens, mod_tokens_id, a.freeze_model, unet0=unet0)
                 elif a.type == 'lora':
                     save_path = os.path.join(a.out_dir, '%s-%s-%04d.pt' % (basename(a.data), a.type, global_step))
-                    torch.save(lora_layers.state_dict(), save_path)
+                    torch.save(get_peft_model_state_dict(unet), save_path)
 
                 # test sample
                 if a.validate:
-                    pipetest = StableDiffusionPipeline(vae, text_encoder, tokenizer, unet, scheduler, None, None, False).to(device)
+                    pipetest = StableDiffusionPipeline(vae, text_encoder, tokenizer, unet, scheduler, None, None, None, False).to(device)
                     pipetest.set_progress_bar_config(disable=True)
                     with torch.autocast("cuda"):
                         if train_txtenc:
@@ -284,7 +288,7 @@ def main():
         save_delta(save_path, unet, text_encoder, mod_tokens, mod_tokens_id, a.freeze_model, unet0=unet0)
     elif a.type == 'lora':
         save_path = os.path.join(a.out_dir, '%s-%s.pt' % (basename(a.data), a.type))
-        torch.save(lora_layers.state_dict(), save_path)
+        torch.save(get_peft_model_state_dict(unet), save_path)
 
 
 if __name__ == "__main__":

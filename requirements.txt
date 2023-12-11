@@ -3,9 +3,11 @@ git+https://github.com/huggingface/diffusers
 git+https://github.com/openai/CLIP
 torchmetrics
 accelerate
+safetensors==0.3.1
 peft
 
 imageio-ffmpeg
+omegaconf
 easydict
 numpy==1.23
 tqdm
@@ -19,4 +21,4 @@ resize_right
 torchdiffeq
 torchsde
 ipywidgets
-
+av
