@@ -94,8 +94,11 @@ There are also few Windows bat-files, slightly simplifying and automating the co
 Text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
 More radical blending can be achieved with **multiguidance technique**, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
-It's possible also to use **reference images** as prompts by providing the path with `--img_ref ..` option. If it's a directory, single generations or interpolations will pick the files one by one, while video generation will consume them all at once.  
-*NB: WIP, for now only single generation and AnimateDiff supported.*
+It's possible also to use **reference images** as visual prompts by providing the path with `--img_ref ..` option. If it's a directory, you may set `--allref` to load them all at once as a single input; otherwise it will pick the files one by one.   
+For instance, this would make a smooth interpolation over a directory of images as visual prompts:  
+```
+python src/latwalk.py --img_ref _in/pix --latblend 0.8 --size 1024-576
+```
 
 
 ## Guide synthesis with [ControlNet] or [Instruct pix2pix]
@@ -106,7 +109,7 @@ python src/preproc.py -i _in/something.jpg --type depth -o _in/depth
 python src/gen.py --control_mod depth --control_img _in/depth/something.jpg -im _in/something.jpg -t "neon glow steampunk" -f 1
 ```
 One can replace `depth` in the commands above with `canny` (edges) or `pose` (if there are humans in the source).  
-Option `-im ...` may be omitted to employ "pure" txt2img method, pushing the result further to the text prompt:
+Option `-im ...` may be omitted to employ "pure" txt2img method, pushing the result closer to the text prompt:
 ```
 python src/preproc.py -i _in/something.jpg --type canny -o _in/canny
 python src/gen.py --control_mod canny --control_img _in/canny/something.jpg -t "neon glow steampunk" --size 1024-512 --model 15drm
@@ -137,7 +140,7 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 
 ## Text to Video
 
-Generate video from a text prompt with [AnimateDiff] motion adapter (may combine it with any base SD model):
+Generate a video from a text prompt with [AnimateDiff] motion adapter (may combine it with any base SD model):
 ```
 python src/anima.py -t "fiery dragon in a China shop" -m 15drm --frames 100 --loop
 ```
@@ -145,8 +148,12 @@ Process existing video:
 ```
 python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -f 0.7 -m 15drm
 ```
+Generate a video interpolation over a text file (as text prompts) and a directory of images (as visual prompts):
+```
+python src/anima.py -t yourfile.txt -imr _in/pix -m 15drm --frames 200 
+```
 
-Generate video from a text prompt with [ZeroScope] model (kinda obsolete):
+Generate a video from a text prompt with [ZeroScope] model (kinda obsolete):
 ```
 python src/vid.py -t "fiery dragon in a China shop" --model vzs --frames 100 --loop
 ```
@@ -179,7 +186,7 @@ Custom diffusion trains faster and can achieve impressive reproduction quality (
 LoRA finetuning seems less precise while may affect wider spectrum of topics, and is a de-facto industry standard now.  
 Textual inversion is more generic but stable. Also, its embeddings can be easily combined together on load.  
 
-* Generate image with trained weights from [LoRA]:
+* Generate an image with trained weights from [LoRA]:
 ```
 python src/gen.py -t "cosmic beast cat" --load_lora mycat1-lora.pt
 ```

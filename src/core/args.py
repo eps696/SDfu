@@ -16,7 +16,7 @@ def main_args():
     parser.add_argument('-post','--postxt', default='', help='Postfix for input text')
     parser.add_argument('-im', '--in_img',  default=None, help='input image or directory with images (overrides width and height)')
     parser.add_argument('-imr','--img_ref', default=None, help='Reference image or directory with images (overrides width and height)')
-    parser.add_argument('-imw', '--imgref_weight', default=0.5, type=float, help='Weight for the reference image(s), relative to the text prompt')
+    parser.add_argument('-imw', '--imgref_weight', default=0.3, type=float, help='Weight for the reference image(s), relative to the text prompt')
     parser.add_argument('-M',  '--mask',    default=None, help='Path to input mask for inpainting mode (overrides width and height)')
     parser.add_argument('-un','--unprompt', default=None, help='Negative prompt to be used as a neutral [uncond] starting point')
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
@@ -48,6 +48,7 @@ def main_args():
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
     parser.add_argument('-lo', '--lowmem',  action='store_true', help='Offload subnets onto CPU for higher resolution [slower]')
     parser.add_argument('-inv', '--invert_mask', action='store_true')
+    parser.add_argument('-ar',  '--allref',   action='store_true', help='Apply all reference images at once or pick one by one?')
     parser.add_argument('-v',  '--verbose', action='store_true')
 
     return parser

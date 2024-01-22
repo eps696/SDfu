@@ -22,6 +22,33 @@ def get_args(parser):
     parser.add_argument(       '--skiplast', action='store_true', help='Skip repeating last frame (for smoother animation)')
     return parser.parse_args()
 
+def cond_mix(a, csb, cwb, i, tt=0):
+    if a.lguide and a.cguide: # full cfg-multiguide (best, slow!)
+        cs  = csb[i % len(csb)]
+        cws = cwb[i % len(cwb)] * (1.- tt)
+        if tt > 0:
+            cs  = torch.cat([cs,  csb[(i+1) % len(csb)]])
+            cws = torch.cat([cws, cwb[(i+1) % len(cwb)] * tt])
+    elif a.cguide: # cfg-multiguide on batch + cond lerp between steps (less consistent)
+        cs  = lerp(csb[i % len(csb)], csb[(i+1) % len(csb)], tt)
+        cws = lerp(cwb[i % len(cwb)], cwb[(i+1) % len(cwb)], tt)
+    elif a.lguide: # cond lerp on batch + cfg-multiguide between steps
+        cs1  = csb[i % len(csb)]
+        cws1 = cwb[i % len(cwb)]
+        cs = sum([cws1[j] * cs1[j] for j in range(len(cs1))]).unsqueeze(0)
+        cws = [1.- tt]
+        if tt > 0:
+            cs2  = csb[(i+1) % len(csb)]
+            cws2 = cwb[(i+1) % len(cwb)]
+            cs2 = sum([cws2[j] * cs2[j] for j in range(len(cs2))]).unsqueeze(0)
+            cs  = torch.cat([cs, cs2])
+            cws = [1.- tt, tt]
+    else: # only cond lerp (incoherent for multi inputs)
+        cwb = cwb[:, :, None, None]
+        cs = lerp(csb[i % len(csb)] * cwb[i % len(cwb)], csb[(i+1) % len(csb)] * cwb[(i+1) % len(cwb)], tt).sum(0, keepdims=True)
+        cws = [1.]
+    return cs, cws
+
 @torch.no_grad()
 def main():
     a = get_args(main_args())
@@ -47,37 +74,19 @@ def main():
         lb = LatentBlending(sd, a.steps, a.cfg_scale)
         img_count = 0
 
-    def genmix(zs, csb, cwb, uc, i, tt=0, verbose=True, **gendict):
-        if a.lguide and a.cguide: # full cfg-multiguide (best, slow!)
-            cs  = csb[i % len(csb)]
-            cws = cwb[i % len(cwb)] * (1.- tt)
-            if tt > 0:
-                cs  = torch.cat([cs,  csb[(i+1) % len(csb)]])
-                cws = torch.cat([cws, cwb[(i+1) % len(cwb)] * tt])
-        elif a.cguide: # cfg-multiguide on batch + cond lerp between steps (less consistent)
-            cs  = lerp(csb[i % len(csb)], csb[(i+1) % len(csb)], tt)
-            cws = lerp(cwb[i % len(cwb)], cwb[(i+1) % len(cwb)], tt)
-        elif a.lguide: # cond lerp on batch + cfg-multiguide between steps
-            cs1  = csb[i % len(csb)]
-            cws1 = cwb[i % len(cwb)]
-            cs = sum([cws1[j] * cs1[j] for j in range(len(cs1))]).unsqueeze(0)
-            cws = [1.- tt]
-            if tt > 0:
-                cs2  = csb[(i+1) % len(csb)]
-                cws2 = cwb[(i+1) % len(cwb)]
-                cs2 = sum([cws2[j] * cs2[j] for j in range(len(cs2))]).unsqueeze(0)
-                cs  = torch.cat([cs, cs2])
-                cws = [1.- tt, tt]
-        else: # only cond lerp (incoherent for multi inputs)
-            cwb = cwb[:, :, None, None]
-            cs = lerp(csb[i % len(csb)] * cwb[i % len(cwb)], csb[(i+1) % len(csb)] * cwb[(i+1) % len(cwb)], tt).sum(0, keepdims=True)
-            cws = [1.]
+    def genmix(zs, csb, cwb, uc, i, tt=0, c_img=None, verbose=True, **gendict):
+        if c_img is not None:
+            gendict['c_img'] = lerp(c_img[i % len(c_img)], c_img[(i+1) % len(c_img)], tt).sum(0, keepdims=True)
+        cs, cws = cond_mix(a, csb, cwb, i, tt)
         z_ = slerp(zs[i % len(zs)], zs[(i+1) % len(zs)], tt)
         images = sd.generate(z_, cs, uc, cws=cws, verbose=verbose, **gendict)
         return images
 
     if isset(a, 'in_lats') and os.path.exists(a.in_lats): # load saved latents & conds
         zs, csb, cwb, uc = read_latents(a.in_lats) # [num,1,4,h,w], [num,b,77,768], [num,b], [1,77,768]
+        if os.path.isfile(a.in_lats.replace('.pkl', '-ic.pkl')): # ip adapter img conds
+            img_conds, a.imgref_weight = read_latents(a.in_lats.replace('.pkl', '-ic.pkl'))
+            gendict['c_img'] = img_conds
         uc = uc[:1] # eliminate multiplication if selected by indices
         zs *= sd.scheduler.init_noise_sigma # fit current sampler
         cwb /= a.cfg_scale
@@ -89,6 +98,15 @@ def main():
         csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
         uc = multiprompt(sd, a.unprompt)[0][0]
         count = len(csb)
+
+        if isset(a, 'img_ref'):
+            assert os.path.exists(a.img_ref), "!! Image ref %s not found !!" % a.img_ref
+            img_refs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
+            if isset(a, 'allref'):
+                gendict['c_img'] = img_conds = [sd.img_c([load_img(im, tensor=False)[0] for im in img_refs])] # all images at once
+            else:
+                gendict['c_img'] = img_conds = torch.stack([sd.img_c(load_img(im, tensor=False)[0]) for im in img_refs]) # [N,1,1024] # every image separately
+                count = max(count, len(img_conds))
 
         if isset(a, 'in_img'):
             if os.path.isdir(a.in_img): # interpolation between images
@@ -133,9 +151,12 @@ def main():
         else:
             lat_dir = 'lats/'
             os.makedirs(os.path.join(a.out_dir, lat_dir), exist_ok=True)
-            a.out_lats = os.path.join(a.out_dir, lat_dir, os.path.basename(a.out_lats))
+            a.out_lats = os.path.join(a.out_dir, lat_dir, os.path.basename(a.out_lats) + '.pkl')
             with open(a.out_lats, 'wb') as f:
                 pickle.dump((zs / sd.scheduler.init_noise_sigma, csb, cwb * a.cfg_scale, uc), f) # forget sampler, remember scale
+            if isset(a, 'img_ref'):
+                with open(a.out_lats.replace('.pkl', '-ic.pkl'), 'wb') as f:
+                    pickle.dump((img_conds, a.imgref_weight), f)
             if a.verbose:
                 print('.. exporting :: zs', zs.shape, 'csb', csb.shape, 'cwb', cwb.shape)
                 pbar = progbar(count)
@@ -143,7 +164,7 @@ def main():
                     images = genmix(zs, csb, cwb, uc, i, **cdict, **gendict, verbose=False)
                     if a.verbose: cvshow(images[0].detach().clone().permute(1,2,0), name='key lats')
                     try:
-                        file_out = '%03d-%s' % (i, texts[i]) # , a.sampler, sd.seed
+                        file_out = '%03d-%s' % (i, texts[i % len(texts)][:80]) # , a.sampler, sd.seed
                         save_img(images[0], 0, a.out_dir, prefix=lat_dir, filepath=file_out + '.jpg')
                     except:
                         save_img(images[0], i, a.out_dir, prefix=lat_dir)
@@ -157,8 +178,10 @@ def main():
         if a.latblend > 0:
             if not a.cguide: # cond lerp (may be incoherent)
                 csb = sum([csb[:,j] * cwb[:,j,None,None] for j in range(csb.shape[1])]).unsqueeze(1)
-            lb.set_conds(csb[i % len(csb)], csb[(i+1) % len(csb)], cwb[0], uc) # same weights for all multi conds!
-            lb.init_lats( zs[i % len(zs)],   zs[(i+1) % len(zs)], **cdict) # same control image for the whole interpolation!
+            if isset(a, 'img_ref'): 
+                cdict['c_img'] = torch.stack([ img_conds[i % len(img_conds)], img_conds[(i+1) % len(img_conds)] ])
+            lb.set_conds(csb[i % len(csb)], csb[(i+1) % len(csb)], cwb[0], uc, **cdict) # same weights for all multi conds, same cnet image for the whole interpol
+            lb.init_lats( zs[i % len(zs)],   zs[(i+1) % len(zs)])
             lb.run_transition(W, H, 1.- a.latblend, max_branches = a.fstep, reuse = i>0)
             img_count += lb.save_imgs(a.out_dir, img_count, skiplast=a.skiplast)
             pbar.upd(uprows=2)

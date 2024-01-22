@@ -33,14 +33,21 @@ def main():
     size = None if not isset(a, 'size') else calc_size(a.size)
     if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
 
-    csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
     uc = multiprompt(sd, a.unprompt)[0][0]
+    if isset (a, 'in_txt'):
+        csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
+    else:
+        csb, cwb, texts = uc[None], torch.tensor([[1.]]), ['']
     count = len(csb)
 
     if isset(a, 'img_ref'):
         assert os.path.exists(a.img_ref), "!! Image ref %s not found !!" % a.img_ref
         img_refs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
-        img_conds = [sd.img_c(load_img(im, tensor=False)[0]) for im in img_refs] # every image separately
+        if a.allref:
+            img_conds = [sd.img_c([load_img(im, tensor=False)[0] for im in img_refs])] # all images at once
+        else:
+            img_conds = [sd.img_c(load_img(im, tensor=False)[0]) for im in img_refs] # every image separately
+            count = max(count, len(img_refs))
 
     if isset(a, 'in_img'):
         assert os.path.exists(a.in_img), "!! Image(s) %s not found !!" % a.in_img

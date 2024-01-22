@@ -92,17 +92,23 @@ class LatentBlending():
         guidance_scale_effective = self.scale_base - max_guidance_reduction * mid_factor
         self.cfg_scale = guidance_scale_effective
 
-    def set_conds(self, cond1, cond2, cws, uc):
+    def set_conds(self, cond1, cond2, cws, uc, cnimg=None, c_img=None):
         self.text_emb1 = cond1
         self.text_emb2 = cond2
-        self.cws = cws
-        self.uc = uc
+        self.cws       = cws
+        self.uc        = uc
+        self.cnimg     = cnimg
+        if c_img is not None: 
+            uc_img = torch.zeros_like(c_img[0]) # [1,1024]
+            self.img_emb1 = uc_img if self.cfg_scale==0 else c_img[0] if self.cfg_scale==1 else torch.cat([uc_img, c_img[0]])
+            self.img_emb2 = uc_img if self.cfg_scale==0 else c_img[1] if self.cfg_scale==1 else torch.cat([uc_img, c_img[1]])
+        else:
+            self.img_emb1 = self.img_emb2 = None
 
-    def init_lats(self, lat1, lat2, cnimg=None, **kwargs):
-        self.branch1_cross_power = 0. # to keep initial latents intact
+    def init_lats(self, lat1, lat2, **kwargs):
+        self.branch1_cross_power = 0. # to keep keypoint latents intact
         self.lat_init1 = lat1
         self.lat_init2 = lat2
-        self.cnimg     = cnimg
 
     def run_transition(self, w, h, depth_strength=0.4, t_compute_max=None, max_branches=None, reuse=False, seeds=None):
         """ Function for computing transitions. Returns a list of transition images using spherical latent blending.
@@ -162,9 +168,10 @@ class LatentBlending():
     def compute_latents1(self):
         # diffusion trajectory 1
         cond = self.text_emb1
+        im_cond = self.img_emb1
         t0 = time.time()
         lat_start = self.get_noise(self.seed1) if self.lat_init1 is None else self.lat_init1
-        lats1 = self.run_diffusion(cond, lat_start)
+        lats1 = self.run_diffusion(cond, im_cond, lat_start)
         t1 = time.time()
         self.dt_per_diff = (t1 - t0) / self.steps
         self.tree_lats[0] = lats1
@@ -173,15 +180,16 @@ class LatentBlending():
     def compute_latents2(self):
         # diffusion trajectory 2, may be affected by trajectory 1
         cond = self.text_emb2
+        im_cond = self.img_emb2
         lat_start = self.get_noise(self.seed2) if self.lat_init2 is None else self.lat_init2
         if self.branch1_cross_power > 0.0: # influenced by branch1 ?
             idx_mixing_stop = int(round(self.steps * self.branch1_cross_range))
             mix_coeffs = list(np.linspace(self.branch1_cross_power, self.branch1_cross_power * self.branch1_cross_decay, idx_mixing_stop))
             mix_coeffs.extend((self.steps - idx_mixing_stop) * [0])
             lats_mixing = self.tree_lats[0]
-            lats2 = self.run_diffusion(cond, lat_start, 0, lats_mixing, mix_coeffs)
+            lats2 = self.run_diffusion(cond, im_cond, lat_start, 0, lats_mixing, mix_coeffs)
         else:
-            lats2 = self.run_diffusion(cond, lat_start)
+            lats2 = self.run_diffusion(cond, im_cond, lat_start)
         self.tree_lats[-1] = lats2
         return lats2
 
@@ -198,10 +206,13 @@ class LatentBlending():
         """
         if self.cfg_scale == 0: # no guidance
             cond = None
-        elif isset(self.sd.a, 'lguide') and self.sd.a.lguide is True: # multi guidance
-            cond = [self.text_emb1, self.text_emb2, fract_mixing]
-        else: # cond lerp
-            cond = lerp(self.text_emb1, self.text_emb2, fract_mixing) if self.cfg_scale > 0 else None
+            im_cond = None
+        else:
+            if isset(self.sd.a, 'lguide') and self.sd.a.lguide is True: # multi guidance
+                cond = [self.text_emb1, self.text_emb2, fract_mixing]
+            else: # cond lerp
+                cond = lerp(self.text_emb1, self.text_emb2, fract_mixing) if self.cfg_scale > 0 else None
+            im_cond = lerp(self.img_emb1,  self.img_emb2,  fract_mixing) if self.img_emb1 is not None and self.cfg_scale > 0 else None
         fract_mixing_parental = (fract_mixing - self.tree_fracts[b_parent1]) / (self.tree_fracts[b_parent2] - self.tree_fracts[b_parent1])
 
         lats_parent_mix = []
@@ -221,7 +232,7 @@ class LatentBlending():
             mix_coeffs.extend(list(np.linspace(self.parent_cross_power, self.parent_cross_power * self.parent_cross_power_decay, nmb_mixing)))
         mix_coeffs.extend((self.steps - len(mix_coeffs)) * [0])
         lat_start = lats_parent_mix[idx_injection - 1]
-        lats = self.run_diffusion(cond, lat_start, idx_injection, lats_parent_mix, mix_coeffs)
+        lats = self.run_diffusion(cond, im_cond, lat_start, idx_injection, lats_parent_mix, mix_coeffs)
         return lats
 
     def get_time_based_branching(self, depth_strength, t_compute_max=None, max_branches=None):
@@ -351,7 +362,7 @@ class LatentBlending():
         return b_parent1, b_parent2
 
     @torch.no_grad()
-    def run_diffusion(self, cond, lat_start, idx_start=0, lats_mixing=None, mix_coeffs=0.):
+    def run_diffusion(self, cond, im_cond, lat_start, idx_start=0, lats_mixing=None, mix_coeffs=0.):
         """
             cond: torch.FloatTensor
                 Prompt conditioning (text embedding)
@@ -399,18 +410,19 @@ class LatentBlending():
                     lat = self.slerp(lat, lat_mixtarget, list_mixing_coeffs[i]) # mix latents
 
                 if self.sd.a.sampler == 'euler':
-                    lat = self.euler_step(lat, cond, self.sd.sigmas, i)
+                    lat = self.euler_step(lat, cond, im_cond, self.sd.sigmas, i)
                 else: # ddim
-                    lat = self.ddim_step(lat, cond, self.sd.timesteps[i])
+                    lat = self.ddim_step(lat, cond, im_cond, self.sd.timesteps[i])
 
                 lats_out.append(lat.clone())
 
             return lats_out
 
-    def euler_step(self, lat, cond, sigmas, i, verbose=True):
+    def euler_step(self, lat, cond, im_cond, sigmas, i, verbose=True):
         with self.run_scope("cuda"):
             sigma = sigmas[i]
             t = sigma * lat.new_ones([lat.shape[0]])
+            ukwargs = {}
             if self.cfg_scale > 0:
                 if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
                     cond, cond2, mix = cond
@@ -421,20 +433,22 @@ class LatentBlending():
                     bs = len(cond) + 1
                     cond_in = torch.cat([self.uc, cond])
                 lat_in = torch.cat([lat] * bs)
-                noises = self.sd.kdiff_model(lat_in, t, cond=cond_in).chunk(bs)
+                if im_cond is not None: # encoded img for ip adapter
+                    ukwargs['added_cond_kwargs'] = {"image_embeds": im_cond}
+                noises = self.sd.kdiff_model(lat_in, t, cond=cond_in, **ukwargs).chunk(bs)
                 denoised = noises[0] # uncond
                 for n in range(len(cond)): # multi guidance
                     denoise_guide = noises[n+1] * (1.-mix) + noises[n+1+len(cond)] * mix - noises[0] if mix > 0 else noises[n+1] - noises[0]
                     denoised = denoised + denoise_guide * self.cfg_scale * self.cws[n % len(self.cws)]
                 # denoised = noise_un + (noise_c1 * (1.-mix) + noise_c2 * mix - noise_un) * self.cfg_scale # single cond
             else: # no guidance
-                denoised = self.sd.kdiff_model(lat, t, cond=self.uc)
+                denoised = self.sd.kdiff_model(lat, t, cond=self.uc, **ukwargs)
             d = (lat - denoised) / sigma
             dt = sigmas[i + 1] - sigma
             lat = lat + d * dt # Euler method
         return lat
 
-    def ddim_step(self, lat, cond, t, verbose=True):
+    def ddim_step(self, lat, cond, im_cond, t, verbose=True):
         with self.run_scope("cuda"):
             lat = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers!?
             if self.cfg_scale > 0:
@@ -449,11 +463,13 @@ class LatentBlending():
                 lat_in = torch.cat([lat] * bs)
 
                 ukwargs = {}
-                if self.sd.use_cnet and self.cnimg is not None:
+                if self.sd.use_cnet and self.cnimg is not None: # controlnet
                     ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cnimg, 1, return_dict=False)
                     ctl_downs = [ctl_down * self.sd.a.control_scale for ctl_down in ctl_downs]
                     ctl_mid *= self.sd.a.control_scale
                     ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                if im_cond is not None: # encoded img for ip adapter
+                    ukwargs['added_cond_kwargs'] = {"image_embeds": im_cond}
 
                 noises = self.sd.unet(lat_in, t, cond_in, **ukwargs).sample.chunk(bs) # pred noise residual at step t
                 noise_pred = noises[0] # uncond

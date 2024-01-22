@@ -127,7 +127,7 @@ class SDfu:
             self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.maindir, 'image/ip-adapter_sd15.bin'), map_location="cpu"))
             self.pipe.register_modules(image_encoder = self.image_encoder)
             self.pipe.set_ip_adapter_scale(a.imgref_weight)
-            if a.verbose: print(' loaded IP adapter for image encodings')
+            if a.verbose: print(' loaded IP adapter for images', a.img_ref)
 
         self.final_setup(a)
 
@@ -327,10 +327,8 @@ class SDfu:
         return self.lat_z(self.img_lat(image))
 
     def rnd_z(self, H, W, frames=None):
-        if frames is None: # image
-            shape_ = (self.a.batch, 4,         H // self.vae_scale, W // self.vae_scale)
-        else: # video
-            shape_ = (self.a.batch, 4, frames, H // self.vae_scale, W // self.vae_scale)
+        shape_ = [self.a.batch, 4, H // self.vae_scale, W // self.vae_scale] # image b,4,h,w
+        if frames is not None: shape_.insert(2, frames) # video b,4,f,h,w
         lat = torch.randn(shape_, generator=self.g_, device=device, dtype=torch.float16)
         return self.scheduler.init_noise_sigma * lat
 
@@ -358,15 +356,17 @@ class SDfu:
     def generate(self, lat, cs, uc, c_img=None, cfg_scale=None, cws=None, mask=None, masked_lat=None, depth=None, cnimg=None, ilat=None, offset=0, verbose=True):
         if cfg_scale is None: cfg_scale = self.a.cfg_scale
         with torch.no_grad(), self.run_scope('cuda'):
-            if cws is None or not len(cws) == len(cs): cws = [1 / len(cs)] * len(cs)
-            conds = uc if cfg_scale==0 else cs[:self.a.batch] if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
+            if cws is None or not len(cws) == len(cs): cws = [len(uc) / len(cs)] * len(cs)
+            conds = uc if cfg_scale==0 else cs if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
-            bs = len(conds) // self.a.batch
+            bs = len(conds) // (len(uc) * self.a.batch)
             if cnimg is not None and len(lat.shape)==4: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
             if c_img is not None: 
                 uc_img = torch.zeros_like(c_img) # [1,1024]
-                img_conds = uc_img if cfg_scale==0 else c_img[:self.a.batch] if cfg_scale==1 else torch.cat([uc_img, c_img])
+                if len(uc) > 1 and len(uc_img) == 1: uc_img = uc_img.repeat_interleave(len(uc), 0)
+                if len(cs) > 1 and len(c_img)  == 1:  c_img =  c_img.repeat_interleave(len(cs), 0)
+                img_conds = uc_img if cfg_scale==0 else c_img if cfg_scale==1 else torch.cat([uc_img, c_img])
                 if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
             if self.use_lcm: # lcm scheduler requires reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
@@ -408,7 +408,10 @@ class SDfu:
                             pred = torch.zeros_like(x[:1])
                             slide_count = torch.zeros((1, 1, x.shape[2], 1, 1), device=x.device)
                             for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
-                                pred_sub = calc_pred(x[:,:,slids], t, conds, ukwargs)
+                                conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
+                                if c_img is not None: # ip adapter
+                                    ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(2)])
+                                pred_sub = calc_pred(x[:,:,slids], t, conds_, ukwargs)
                                 pred[:,:,slids] += pred_sub
                                 slide_count[:,:,slids] += 1  # increment which indices were used
                             pred /= slide_count
@@ -478,10 +481,13 @@ class SDfu:
                             noise_pred = torch.zeros_like(lat)
                             slide_count = torch.zeros((1, 1, lat_in.shape[2], 1, 1), device=lat_in.device)
                             for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
+                                conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
+                                if c_img is not None: # ip adapter
+                                    ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(2)])
                                 if self.use_cnet and cnimg is not None: # controlnet
-                                    ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds, cnimg[slids])
+                                    ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds_, cnimg[slids])
                                     ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
-                                noise_pred_sub = calc_noise(lat_in[:,:,slids], t, conds, ukwargs)
+                                noise_pred_sub = calc_noise(lat_in[:,:,slids], t, conds_, ukwargs)
                                 noise_pred[:,:,slids] += noise_pred_sub
                                 slide_count[:,:,slids] += 1  # increment which indices were used
                             noise_pred /= slide_count

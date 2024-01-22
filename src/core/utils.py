@@ -50,10 +50,14 @@ def cvshow(img, name='t'):
         cv2.imshow(name, img[:,:,::-1])
         cv2.waitKey(1)
 
-def calc_size(size, quant=8):
+def calc_size(size, quant=8, pad=False):
     if isinstance(size, str): size = [int(s) for s in size.split('-')]
     if len(size)==1: size = size * 2
+    w0, h0 = size
     w, h = map(lambda x: x - x % quant, size)  # resize to integer multiple of 8
+    if pad and list(size) != [w,h]:
+        if w0 != w: w += quant
+        if h0 != h: h += quant
     return w, h
 
 def lerp(v0, v1, x):
@@ -106,23 +110,29 @@ def triblur(x, k=3, pow=1.0):
     x = x.reshape(b,c,h,w)
     return x
 
-def load_img(path, size=None, tensor=True):
+def load_img(path, size=None, tensor=True, quant=8, pad=False):
     image = Image.open(path).convert('RGB')
     if isinstance(size, int): size = [size,size]
-    w, h = image.size if size is None else size
-    w, h = map(lambda x: x - x % 8, (w, h))  # resize to integer multiple of 8
-    resampl = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
-    image = image.resize((w,h), resampl) # (w,h)
+    if size is None: size = image.size
+    w, h = calc_size(size, quant, pad)
+    if [w,h] != list(image.size):
+        if pad:
+            result = Image.new(image.mode, (w,h))
+            result.paste(image, (0,0))
+            image = result
+        else:
+            resampl = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
+            image = image.resize((w,h), resampl) # (w,h)
     if not tensor: return image, (w,h)
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0,3,1,2)
     image = torch.from_numpy(image).to(device, dtype=torch.float16)
     return 2.*image - 1., (w,h)
 
-def save_img(image, num, out_dir, prefix='', filepath=None):
+def save_img(image, num, out_dir, prefix='', filepath=None, ext='jpg'):
     image = torch.clamp((image + 1.) / 2., min=0., max=1.).permute(1,2,0).cpu().numpy() * 255
-    if filepath is None: filepath = '%05d.jpg' % num
-    Image.fromarray(image.astype(np.uint8)).save(os.path.join(out_dir, prefix + filepath))
+    if filepath is None: filepath = '%05d.%s' % (num, ext)
+    Image.fromarray(image.astype(np.uint8)).save(os.path.join(out_dir, prefix + filepath), quality=95, subsampling=0)
 
 def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, tensor=True, model_path='models/clipseg/rd64-uni.pth'):
     if os.path.isfile(mask_str): 
