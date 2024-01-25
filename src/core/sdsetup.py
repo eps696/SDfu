@@ -110,8 +110,7 @@ class SDfu:
         if isset(a, 'animdiff'):
             if not os.path.exists(a.animdiff): a.animdiff = os.path.join(a.maindir, 'anima')
             assert os.path.exists(a.animdiff), "Not found AnimateDiff model %s" % a.animdiff
-            from diffusers.models import UNetMotionModel
-            from diffusers.models.unet_motion_model import MotionAdapter
+            from diffusers.models import UNetMotionModel, MotionAdapter
             motion_adapter = MotionAdapter.from_pretrained(a.animdiff)
             self.unet = UNetMotionModel.from_unet2d(self.unet, motion_adapter)
             self.scheduler = self.set_scheduler(a) # k-samplers must be loaded after unet

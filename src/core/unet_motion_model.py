@@ -1,8 +1,11 @@
 # small fix of the original diffusers motion model class, to allow batched/scheduled conditions
 
+from dataclasses import dataclass
 import torch
 
-from diffusers.models.unet_3d_condition import UNet3DConditionOutput
+@dataclass
+class UNet3DConditionOutput():
+    sample: torch.FloatTensor
 
 def animdiff_forward(self, sample, timestep, encoder_hidden_states, timestep_cond=None, attention_mask=None, cross_attention_kwargs=None,
     added_cond_kwargs=None, down_block_additional_residuals=None, mid_block_additional_residual=None, return_dict=True):
