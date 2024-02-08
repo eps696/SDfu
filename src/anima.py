@@ -127,7 +127,7 @@ def main():
     
     def genmix(z_, cs, cws, uc, **gendict):
         if a.cguide: # use noise lerp with cfg scaling (slower)
-            video = sd.generate(z_, cs, uc, cws=cws, **gendict)
+            video = sd.generate(z_, cs.squeeze(1), uc, cws=cws, **gendict)
         else: # use cond lerp (worse for multi inputs)
             c_ = sum([cs[:,j] * cws[:,j,None,None] for j in range(cs.shape[1])]) # [f,77,768]
             video = sd.generate(z_, c_, uc, **gendict)
