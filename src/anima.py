@@ -11,10 +11,10 @@ warnings.filterwarnings("ignore")
 import torch
 import torch.nn.functional as F
 
-from core.sdsetup import SDfu
+from core.sdsetup import SDfu, device
 from core.args import main_args, samplers, unprompt
 from core.text import multiprompt, txt_clean
-from core.utils import img_list, load_img, slerp, lerp, blend, basename, save_cfg, calc_size, isset
+from core.utils import img_list, load_img, slerp, lerp, blend, framestack, basename, save_cfg, calc_size, isset
 from core.unet_motion_model import animdiff_forward
 
 def get_args(parser):
@@ -28,6 +28,7 @@ def get_args(parser):
     # override
     parser.add_argument('-b',  '--batch',   default=1, type=int, choices=[1])
     parser.add_argument('-s',  '--steps',   default=23, type=int, help="number of diffusion steps")
+    parser.add_argument('-cg', '--cguide',  default=False)
     return parser.parse_args()
 
 def img_out(video):
@@ -36,22 +37,6 @@ def img_out(video):
     images = video.permute(1,2,3,0).unbind(dim=0) # list of [h,w,c]
     images = [(image.cpu().numpy() * 255).astype("uint8") for image in images] # list of [h,w,c]
     return images
-
-def frameset(ins, frames, loop=False, curve='linear'):
-    if len(ins) == 1:
-        return list(ins) * frames
-    assert frames >= len(ins), "Frame count < input count"
-    frames -= 1 # to include the last one
-    if loop: ins = ins + [ins[0]]
-    outs = [ins[0]]
-    steps = len(ins) - 1
-    for i in range(steps):
-        curstep_count = frames // steps + (1 if i < frames % steps else 0)
-        for j in range(1, curstep_count):
-            alpha = blend(j / curstep_count, curve)
-            outs += [(1 - alpha) * ins[i] + alpha * ins[i+1]]
-        outs.append(ins[i+1])
-    return outs
 
 @torch.no_grad()
 def main():
@@ -69,18 +54,14 @@ def main():
     if isset (a, 'in_txt'):
         csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
     else:
-        csb, cwb, texts = uc[None], torch.tensor([[1.]]), ['']
+        csb, cwb, texts = uc[None], torch.tensor([[1.]], device=device).half(), ['']
     count = len(csb)
 
+    img_conds = []
     if isset(a, 'img_ref'):
-        assert os.path.exists(a.img_ref), "!! Image ref %s not found !!" % a.img_ref
-        img_refs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
-        if isset(a, 'allref'):
-            img_conds = sd.img_c([load_img(im, tensor=False)[0] for im in img_refs]) # all images at once
-        else:
-            img_conds = torch.cat([sd.img_c(load_img(im, tensor=False)[0]) for im in img_refs]) # [N,1024] # every image separately
-            if len(csb) != len(img_conds): print('!! %d text prompts != %d img refs !!' % (len(csb), len(img_conds)))
-            count = max(count, len(img_conds))
+        img_conds = sd.img_cus(a.img_ref, isset(a, 'allref')) # list of [2,1,1024]
+        count = max(count, len(img_conds))
+    if len(img_conds) > 0 and len(csb) != len(img_conds): print('!! %d text prompts != %d img refs !!' % (len(csb), len(img_conds)))
 
     if isset(a, 'in_vid'):
         assert os.path.exists(a.in_vid), "Not found %s" % a.in_vid
@@ -103,11 +84,11 @@ def main():
     if not isset(a, 'size'): a.size = size[::-1]
     W, H = calc_size(a.size, pad=True)
 
-    cs_frames = torch.stack(frameset(csb, a.frames, a.loop, a.curve)) # [f,b,77,768]
-    cw_frames = torch.stack(frameset(cwb, a.frames, a.loop, a.curve)) # [f,b]
-    if isset(a, 'img_ref'):
-        gendict['c_img'] = torch.stack(frameset(img_conds, a.frames, a.loop, a.curve)) # [f,1,1024]
+    cs = sum([csb[:,j] * cwb[:,j,None,None] for j in range(csb.shape[1])]) # [num,77,768]
+    cs_frames = framestack(cs, a.frames, a.curve, a.loop) # [f,77,768]
     uc_frames = uc.repeat(a.frames,1,1)
+    if len(img_conds) > 0:
+        gendict['c_img'] = framestack(img_conds, a.frames, a.curve, a.loop, rejoin=True)
 
     if sd.use_cnet and isset(a, 'control_img'):
         assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
@@ -125,14 +106,6 @@ def main():
         print('.. frames', a.frames, '.. model', a.model, '..', a.sampler, '..', '%dx%d' % (W,H), '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
         save_cfg(a, a.out_dir)
     
-    def genmix(z_, cs, cws, uc, **gendict):
-        if a.cguide: # use noise lerp with cfg scaling (slower)
-            video = sd.generate(z_, cs.squeeze(1), uc, cws=cws, **gendict)
-        else: # use cond lerp (worse for multi inputs)
-            c_ = sum([cs[:,j] * cws[:,j,None,None] for j in range(cs.shape[1])]) # [f,77,768]
-            video = sd.generate(z_, c_, uc, **gendict)
-        return video
-
     if isset(a, 'in_vid'):
         if list(video.shape[-2:]) != [H, W]:
             video = F.pad(video, (0, W - video.shape[-1], 0, H - video.shape[-2]), mode='reflect')
@@ -143,7 +116,7 @@ def main():
         sd.set_steps(a.steps, 1)
         z_ = sd.rnd_z(H, W, a.frames) # [1,c,f,h,w]
 
-    video = genmix(z_, cs_frames, cw_frames, uc_frames, **gendict).squeeze(0) # [c,f,h,w]
+    video = sd.generate(z_, cs_frames, uc_frames, **gendict).squeeze(0) # [c,f,h,w]
 
     images = img_out(video)
     for i, image in enumerate(images):

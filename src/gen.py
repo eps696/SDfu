@@ -4,7 +4,7 @@ os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
 
 import torch
 
-from core.sdsetup import SDfu
+from core.sdsetup import SDfu, device
 from core.args import main_args, samplers, unprompt
 from core.text import read_txt, multiprompt
 from core.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar, save_cfg
@@ -37,17 +37,13 @@ def main():
     if isset (a, 'in_txt'):
         csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
     else:
-        csb, cwb, texts = uc[None], torch.tensor([[1.]]), ['']
+        csb, cwb, texts = uc[None], torch.tensor([[1.]], device=device).half(), ['']
     count = len(csb)
 
+    img_conds = []
     if isset(a, 'img_ref'):
-        assert os.path.exists(a.img_ref), "!! Image ref %s not found !!" % a.img_ref
-        img_refs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
-        if a.allref:
-            img_conds = [sd.img_c([load_img(im, tensor=False)[0] for im in img_refs])] # all images at once
-        else:
-            img_conds = [sd.img_c(load_img(im, tensor=False)[0]) for im in img_refs] # every image separately
-            count = max(count, len(img_refs))
+        img_conds = sd.img_cus(a.img_ref, isset(a, 'allref')) # list of [2,1,1024]
+        count = max(count, len(img_conds))
 
     if isset(a, 'in_img'):
         assert os.path.exists(a.in_img), "!! Image(s) %s not found !!" % a.in_img
@@ -75,7 +71,7 @@ def main():
         gendict = {}
         log = texts[i % len(texts)][:80] if len(texts) > 0 else ''
 
-        if isset(a, 'img_ref'):
+        if len(img_conds) > 0:
             gendict['c_img'] = img_conds[i % len(img_conds)]
 
         if isset(a, 'in_img'):

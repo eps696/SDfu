@@ -6,6 +6,7 @@ import pickle
 import collections
 import math
 import skimage
+from einops import rearrange
 import scipy
 from scipy.interpolate import CubicSpline as CubSpline
 
@@ -49,6 +50,26 @@ def cvshow(img, name='t'):
             img = torch.clip((img+1)*127.5, 0, 255).cpu().numpy().astype(np.uint8)
         cv2.imshow(name, img[:,:,::-1])
         cv2.waitKey(1)
+
+def framestack(ins, frames, curve='linear', loop=True, rejoin=False):
+    if len(ins) == 1:
+        outs = torch.stack(list(ins) * frames)
+    else:
+        assert frames >= len(ins), "Frame count < input count"
+        frames -= 1 # to include the last one
+        if loop: ins = list(ins) + [ins[0]]
+        outs = [ins[0]]
+        steps = len(ins) - 1
+        for i in range(steps):
+            curstep_count = frames // steps + (1 if i < frames % steps else 0)
+            for j in range(1, curstep_count):
+                alpha = blend(j / curstep_count, curve)
+                outs += [(1 - alpha) * ins[i] + alpha * ins[i+1]]
+            outs.append(ins[i+1])
+        outs = torch.stack(outs)
+    if rejoin:
+        outs = rearrange(outs, 'n b l f -> (b n) l f')
+    return outs
 
 def calc_size(size, quant=8, pad=False):
     if isinstance(size, str): size = [int(s) for s in size.split('-')]

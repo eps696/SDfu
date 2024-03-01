@@ -76,7 +76,7 @@ def main():
 
     if os.path.exists(a.model):
         SDload = StableDiffusionPipeline.from_single_file if os.path.isfile(a.model) else StableDiffusionPipeline.from_pretrained
-        pipe = SDload(a.model, torch_dtype=torch.float16, revision='fp16', safety_checker=None, requires_safety_checker=False)
+        pipe = SDload(a.model, torch_dtype=torch.float16, variant='fp16', safety_checker=None, requires_safety_checker=False)
         pipe.to(device)
         text_encoder = pipe.text_encoder
         tokenizer    = pipe.tokenizer

@@ -41,8 +41,8 @@ def animdiff_forward(self, sample, timestep, encoder_hidden_states, timestep_con
 
     if self.encoder_hid_proj is not None and self.config.encoder_hid_dim_type == "ip_image_proj":
         image_embeds = added_cond_kwargs.get("image_embeds")
-        image_embeds = self.encoder_hid_proj(image_embeds).to(encoder_hidden_states.dtype)
-        encoder_hidden_states = torch.cat([encoder_hidden_states, image_embeds], dim=1)
+        image_embeds = self.encoder_hid_proj(image_embeds)
+        encoder_hidden_states = (encoder_hidden_states, image_embeds) # image_embeds = list
 
 # !!! conds are batched already as schedule
     # print(' !!!', num_frames, encoder_hidden_states.shape, sample.shape) # 16 [32,77,768]  [2,4,16,72,128]

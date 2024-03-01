@@ -68,6 +68,7 @@ def main():
 
     size = None if a.size is None else calc_size(a.size)
     gendict = {}
+    cdict = {} # controlnet, ip adapter
 
     if a.latblend > 0:
         from core.latblend import LatentBlending
@@ -76,17 +77,17 @@ def main():
 
     def genmix(zs, csb, cwb, uc, i, tt=0, c_img=None, verbose=True, **gendict):
         if c_img is not None:
-            gendict['c_img'] = lerp(c_img[i % len(c_img)], c_img[(i+1) % len(c_img)], tt).sum(0, keepdims=True)
+            c_img = lerp(c_img[i % len(c_img)], c_img[(i+1) % len(c_img)], tt) # [1,1024]
         cs, cws = cond_mix(a, csb, cwb, i, tt)
         z_ = slerp(zs[i % len(zs)], zs[(i+1) % len(zs)], tt)
-        images = sd.generate(z_, cs, uc, cws=cws, verbose=verbose, **gendict)
+        images = sd.generate(z_, cs, uc, cws=cws, verbose=verbose, c_img=c_img, **gendict)
         return images
 
     if isset(a, 'in_lats') and os.path.exists(a.in_lats): # load saved latents & conds
         zs, csb, cwb, uc = read_latents(a.in_lats) # [num,1,4,h,w], [num,b,77,768], [num,b], [1,77,768]
         if os.path.isfile(a.in_lats.replace('.pkl', '-ic.pkl')): # ip adapter img conds
             img_conds, a.imgref_weight = read_latents(a.in_lats.replace('.pkl', '-ic.pkl'))
-            gendict['c_img'] = img_conds
+            cdict['c_img'] = img_conds
         uc = uc[:1] # eliminate multiplication if selected by indices
         zs *= sd.scheduler.init_noise_sigma # fit current sampler
         cwb /= a.cfg_scale
@@ -99,14 +100,10 @@ def main():
         uc = multiprompt(sd, a.unprompt)[0][0]
         count = len(csb)
 
+        img_conds = []
         if isset(a, 'img_ref'):
-            assert os.path.exists(a.img_ref), "!! Image ref %s not found !!" % a.img_ref
-            img_refs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
-            if isset(a, 'allref'):
-                gendict['c_img'] = img_conds = [sd.img_c([load_img(im, tensor=False)[0] for im in img_refs])] # all images at once
-            else:
-                gendict['c_img'] = img_conds = torch.stack([sd.img_c(load_img(im, tensor=False)[0]) for im in img_refs]) # [N,1,1024] # every image separately
-                count = max(count, len(img_conds))
+            cdict['c_img'] = img_conds = sd.img_cus(a.img_ref, isset(a, 'allref')) # list of [2,1,1024]
+            count = max(count, len(img_conds))
 
         if isset(a, 'in_img'):
             if os.path.isdir(a.in_img): # interpolation between images
@@ -138,7 +135,6 @@ def main():
             W, H = [sd.res]*2 if size is None else size
             zs = [sd.rnd_z(H, W) for i in range(count)]
 
-    cdict = {} # for controlnet
     if sd.use_cnet and isset(a, 'control_img'):
         assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
         cdict['cnimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
@@ -154,7 +150,7 @@ def main():
             a.out_lats = os.path.join(a.out_dir, lat_dir, os.path.basename(a.out_lats) + '.pkl')
             with open(a.out_lats, 'wb') as f:
                 pickle.dump((zs / sd.scheduler.init_noise_sigma, csb, cwb * a.cfg_scale, uc), f) # forget sampler, remember scale
-            if isset(a, 'img_ref'):
+            if len(img_conds) > 0:
                 with open(a.out_lats.replace('.pkl', '-ic.pkl'), 'wb') as f:
                     pickle.dump((img_conds, a.imgref_weight), f)
             if a.verbose:
@@ -178,11 +174,11 @@ def main():
         if a.latblend > 0:
             if not a.cguide: # cond lerp (may be incoherent)
                 csb = sum([csb[:,j] * cwb[:,j,None,None] for j in range(csb.shape[1])]).unsqueeze(1)
-            if isset(a, 'img_ref'): 
-                cdict['c_img'] = torch.stack([ img_conds[i % len(img_conds)], img_conds[(i+1) % len(img_conds)] ])
-            lb.set_conds(csb[i % len(csb)], csb[(i+1) % len(csb)], cwb[0], uc, **cdict) # same weights for all multi conds, same cnet image for the whole interpol
+            if len(img_conds) > 0:
+                cdict['c_img'] = [ img_conds[i % len(img_conds)], img_conds[(i+1) % len(img_conds)] ] # list 2 of lists? [2,1,..] 
+            lb.set_conds(csb[i % len(csb)], csb[(i+1) % len(csb)], uc, cws=cwb[0], **cdict) # same weights for all multi conds, same cnet image for whole interpol
             lb.init_lats( zs[i % len(zs)],   zs[(i+1) % len(zs)])
-            lb.run_transition(W, H, 1.- a.latblend, max_branches = a.fstep, reuse = i>0)
+            lb.run_transition(W, H, 1.- a.latblend, a.fstep, reuse = i>0)
             img_count += lb.save_imgs(a.out_dir, img_count, skiplast=a.skiplast)
             pbar.upd(uprows=2)
         else:
@@ -195,6 +191,8 @@ def main():
             img_count = pcount * a.fstep
 
     if a.loop is not True:
+        if len(img_conds) > 0:
+            cdict['c_img'] = [ img_conds[(pcount) % len(img_conds)], img_conds[0] ]
         images = genmix(zs, csb, cwb, uc, pcount, **cdict, **gendict)
         save_img(images[0], img_count, a.out_dir)
 

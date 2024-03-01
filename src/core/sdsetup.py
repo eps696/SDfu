@@ -73,9 +73,9 @@ class SDfu:
             self.load_model_custom(self.a, vae, text_encoder, tokenizer, unet, scheduler)
         else: # downloaded or url
             self.load_model_external(a.model)
+        if not self.a.lowmem: self.pipe.to(device)
         self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
         assert not (isset(a, 'control_mod') and self.use_kdiff), "Controlnet not supported for k-samplers here"
-        if not self.a.lowmem: self.pipe.to(device)
 
         # load finetuned stuff
         mod_tokens = None
@@ -99,34 +99,35 @@ class SDfu:
         if isset(a, 'control_mod'):
             if not os.path.exists(a.control_mod): a.control_mod = os.path.join(a.maindir, 'control', a.control_mod)
             assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
+            if a.verbose: print(' loading ControlNet', a.control_mod)
             from diffusers import ControlNetModel
             self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
             if not self.a.lowmem: self.cnet.to(device)
             self.pipe.register_modules(controlnet=self.cnet)
-            if a.verbose: print(' loaded ControlNet', a.control_mod)
         self.use_cnet = hasattr(self, 'cnet')
 
         # load animatediff = before ip adapter, after custom diffusion !
         if isset(a, 'animdiff'):
             if not os.path.exists(a.animdiff): a.animdiff = os.path.join(a.maindir, 'anima')
             assert os.path.exists(a.animdiff), "Not found AnimateDiff model %s" % a.animdiff
+            if a.verbose: print(' loading AnimateDiff', a.animdiff)
             from diffusers.models import UNetMotionModel, MotionAdapter
             motion_adapter = MotionAdapter.from_pretrained(a.animdiff)
             self.unet = UNetMotionModel.from_unet2d(self.unet, motion_adapter)
             self.scheduler = self.set_scheduler(a) # k-samplers must be loaded after unet
             if not self.a.lowmem: self.unet.to(device)
             self.pipe.register_modules(unet = self.unet, motion_adapter = motion_adapter)
-            if a.verbose: print(' loaded AnimateDiff', a.animdiff)
 
-        # load ip adapter = after animatediff !
+        # load ip adapter = after animatediff
         if isset(a, 'img_ref'):
+            assert '15' in a.model, "!! IP adapter models are hardcoded for SD 1.5"
+            if a.verbose: print(' loading IP adapter for images', a.img_ref)
             from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection as CLIPimg
             self.image_preproc = CLIPImageProcessor.from_pretrained(os.path.join(a.maindir, 'image/preproc_config.json')) # openai/clip-vit-base-patch32
             self.image_encoder = CLIPimg.from_pretrained(os.path.join(a.maindir, 'image'), torch_dtype=torch.float16).to(device)
             self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.maindir, 'image/ip-adapter_sd15.bin'), map_location="cpu"))
             self.pipe.register_modules(image_encoder = self.image_encoder)
             self.pipe.set_ip_adapter_scale(a.imgref_weight)
-            if a.verbose: print(' loaded IP adapter for images', a.img_ref)
 
         self.final_setup(a)
 
@@ -289,15 +290,32 @@ class SDfu:
         next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
         return next_sample
 
-    def img_c(self, images):
+    def img_cus(self, img_path, allref=False): # ucs and cs together
+        assert os.path.exists(img_path), "!! Image ref %s not found !!" % img_path
+        if allref is True: # all files at once
+            img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in [os.path.join(dp, f) for dp,dn,fn in os.walk(img_path) for f in fn]])]
+        else:
+            if os.path.isfile(img_path): # single image
+                img_conds = [self.img_cu(load_img(img_path, 224, tensor=False)[0])] # list 1 of [2,1,..]
+            else:
+                subdirs = sorted([f.path for f in os.scandir(img_path) if f.is_dir()])
+                if len(subdirs) > 0: # every subfolder at once
+                    img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in img_list(sub)]) for sub in subdirs] # list N of [2,1,..]
+                else: # every image separately
+                    img_conds = [self.img_cu(load_img(im, 224, tensor=False)[0]) for im in img_list(img_path)] # list N of [2,1,..]
+        return img_conds # list of [2,1,1024] base or [2,1,257,1280] face
+
+    def img_cu(self, images): # uc and c together
         with self.run_scope('cuda'):
             images = self.image_preproc(images, return_tensors="pt").pixel_values.to(device) # [N,3,224,224]
-            return self.image_encoder(images).image_embeds.mean(0, keepdim=True) # [1,1024]
+            cs = self.image_encoder(images).image_embeds.mean(0, keepdim=True) # [1,1024]
+            ucs = torch.zeros_like(cs)
+            return torch.stack([ucs, cs]) # [2,1,1024] base or [2,1,257,1280] face
 
     def img_lat(self, image, deterministic=False):
         with self.run_scope('cuda'):
             postr = self.vae.encode(image.half()).latent_dist
-            lats = postr.mean if deterministic else postr.sample()
+            lats = postr.mean if deterministic else postr.sample(self.g_)
             lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
 
@@ -361,11 +379,9 @@ class SDfu:
             bs = len(conds) // (len(uc) * self.a.batch)
             if cnimg is not None and len(lat.shape)==4: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
-            if c_img is not None: 
-                uc_img = torch.zeros_like(c_img) # [1,1024]
-                if len(uc) > 1 and len(uc_img) == 1: uc_img = uc_img.repeat_interleave(len(uc), 0)
-                if len(cs) > 1 and len(c_img)  == 1:  c_img =  c_img.repeat_interleave(len(cs), 0)
-                img_conds = uc_img if cfg_scale==0 else c_img if cfg_scale==1 else torch.cat([uc_img, c_img])
+            if c_img is not None:  # already with uc_img
+                if len(cs) > 1 and len(c_img) == 2: c_img = c_img.repeat_interleave(len(cs), 0)
+                img_conds = c_img[len(c_img)//2:] if cfg_scale in [0,1] else c_img # only c if no scale, to keep correct shape
                 if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
             if self.use_lcm: # lcm scheduler requires reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
@@ -454,12 +470,10 @@ class SDfu:
                         return noise_pred
 
                     def calc_cnet_batch(x, t, conds, cnimg):
-                        bcimg = cnimg.repeat(bs, 1, 1, 1) # bs repeat, frames interleave
-                        bconds = conds.repeat_interleave(x.shape[2], 0)
-                        bx = rearrange(x, 'b c f h w -> (b f) c h w' )
+                        bx = rearrange(x, 'b c f h w -> (b f) c h w' ) # bs repeat, frames interleave
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.unet.to("cpu"); torch.cuda.empty_cache()
-                        ctl_downs, ctl_mid = self.cnet(bx, t, bconds, bcimg, self.a.control_scale, return_dict=False)
+                        ctl_downs, ctl_mid = self.cnet(bx, t, conds, cnimg.repeat(bs,1,1,1), self.a.control_scale, return_dict=False)
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.cnet.to("cpu"); torch.cuda.empty_cache()
                         return ctl_downs, ctl_mid

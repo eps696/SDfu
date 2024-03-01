@@ -14,9 +14,10 @@ Current functions:
 * Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
-* **Smooth & stable video edit** with [TokenFlow]
+* Smooth & stable video edit with [TokenFlow]
 * Text to video with **[AnimateDiff]** and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
+* **Ultra-fast HD generation with [SDXL-Lightning]** model (combined with other features)
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
@@ -94,7 +95,7 @@ There are also few Windows bat-files, slightly simplifying and automating the co
 Text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
 More radical blending can be achieved with **multiguidance technique**, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
-It's possible also to use **reference images** as visual prompts by providing the path with `--img_ref ..` option. If it's a directory, you may set `--allref` to load them all at once as a single input; otherwise it will pick the files one by one.   
+It's possible also to use **reference images** as visual prompts by providing the path with `--img_ref ..` option. For a single reference, you can use either a single image, or any file set with `--allref` option. For an ordered scenario, you should provide a directory with image files or subdirectories (with images) to pick them one by one. The latter is preferrable, as the referencing quality is better when using 3-5 images than a single one.
 For instance, this would make a smooth interpolation over a directory of images as visual prompts:  
 ```
 python src/latwalk.py --img_ref _in/pix --latblend 0.8 --size 1024-576
@@ -217,14 +218,15 @@ python src/latwalk.py -m lcm -t yourfile.txt -lb 0.75 -s 8
 
 ## Special model: SDXL
 
-SDXL is not integrated into SDfu core yet, for now it's a separate script, wrapping existing `diffusers` pipelines.  
-Supported features: txt2img, img2img, inpaint, depth/canny controlnet, text interpolations, dual prompts (native).  
-Unsupported (yet): latent blending, multi guidance, fine-tuning, weighted prompts.  
+SDXL is a high quality HD model which is mostly used these days.  
+Supported features: txt2img, img2img, image references, depth/canny controlnet, text interpolations with latent blending, dual prompts (native).  
+Unsupported (yet): video generation, multi guidance, fine-tuning, weighted prompts.  
 NB: The models (~8gb total) are auto-downloaded on the first use; you may download them yourself and set the path with `--models_dir ...` option.  
-As an example, interpolate with ControlNet:
+As an example, interpolate with ControlNet and Latent Blending:
 ```
-python src/sdxl.py -v -t yourfile.txt -cnimg _in/something.jpg -cmod depth -cts 0.6 --size 1280-768 -fs 5
+python src/sdxl.py -v -t yourfile.txt -cnimg _in/something.jpg -cmod depth -cts 0.6 --size 1280-768 -fs 5 -lb 0.8
 ```
+There is also a fast distilled model **[SDXL-Lightning]**, generating images of the same quality with few steps. Use it with `--lighting -s X` option where X = 2, 4 or 8. 
 
 ## Special model: Kandinsky 2.2
 
@@ -262,3 +264,4 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [Potat]: <https://huggingface.co/camenduru/potat1>
 [ComfyUI]: <https://github.com/comfyanonymous/ComfyUI>
 [IP adapter]: <https://huggingface.co/h94/IP-Adapter>
+[SDXL-Lightning]: <https://huggingface.co/ByteDance/SDXL-Lightning>
