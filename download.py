@@ -53,7 +53,7 @@ def main():
     get_model("https://www.dropbox.com/s/uyaidznqjaot7hw/sdfu-video-unet-fp16.zip?dl=1", 'models/v2')
 
     print(' downloading AnimateDiff motion model')
-    get_model("https://www.dropbox.com/s/l49n8tt615ibmjm/sdfu-animatediff.zip?dl=1", 'models')
+    get_model("https://www.dropbox.com/scl/fi/4gorn5lf9owygizhgwuy6/sdfu-animatediff-fp16.zip?rlkey=mh54vl9ngre9n898pcgsr8fry&dl=1", 'models')
 
     print(' downloading ControlNet models')
     get_model("https://www.dropbox.com/s/qhe1zpbubjr3t75/sdfu-controlnet.zip?dl=1", 'models')

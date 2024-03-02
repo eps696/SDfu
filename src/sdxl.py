@@ -193,17 +193,17 @@ class SDfu:
         with torch.no_grad(), self.run_scope('cuda'):
             self.set_steps(self.a.steps, self.a.strength) # trailing (lcm) schedulers require reset on every generation
             bs = 1 if cfg_scale in [0,1] else 2
-            conds = cs
+            conds = cs.repeat_interleave(len(lat), 0)
+            pool_c = pool_c.repeat_interleave(len(lat), 0)
+            time_ids = time_ids.repeat_interleave(len(lat), 0)
             ukwargs = {'added_cond_kwargs': {"text_embeds": pool_c, "time_ids": time_ids}}
             if cnimg is not None: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
             if c_img is not None: # already with uc
                 c_imgs = c_img if isinstance(c_img, list) else [c_img]
                 img_conds = []
                 for c_img in c_imgs:
-                    if len(cs) > 1 and len(c_img)==2: c_img = c_img.repeat_interleave(len(cs), 0)
                     img_cond = c_img[len(c_img)//2:] if cfg_scale in [0,1] else c_img # only c if no scale
-                    if self.a.batch > 1: img_cond = img_cond.repeat_interleave(self.a.batch, 0)
-                    img_conds += [img_cond]
+                    img_conds += [img_cond.repeat_interleave(len(lat), 0)]
                 ukwargs['added_cond_kwargs']['image_embeds'] = img_conds
 
             def calc_noise(x, t, conds, **ukwargs):
@@ -240,7 +240,7 @@ class SDfu:
                 output = torch.cat([self.vae.decode(lat[b : b + self.a.vae_batch]).sample.float().cpu() for b in range(0, len(lat), self.a.vae_batch)])
                 output = output[None,:].permute(0,2,1,3,4) # [1,c,f,h,w]
             else: # image
-                output = self.vae.decode(lat).sample.float().cpu()
+                output = torch.cat([self.vae.decode(l).sample.float().cpu() for l in lat.chunk(len(lat))]) # OOM if batch
 
             return output
 
@@ -262,16 +262,15 @@ def main():
 
     un = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
     prompts, texts = read_multitext(a.in_txt, a.pretxt, a.postxt)
-    count = len(prompts)
-
     cs, pool_cs = [], []
     for prompt_ in prompts:
         p1, p2 = prompt_ if len(prompt_)==2 else prompt_ * 2
         c_, uc, pool_c, pool_uc = sd.encode_prompt(p1, p2, un, un, do_cfg, a.num)
         cs.append(c_)
         pool_cs.append(pool_c)
-    cs = torch.stack(cs) # [N,1,77,2048]
-    pool_cs = torch.stack(pool_cs) # [N,1,1280]
+    cs = torch.cat(cs).unsqueeze(1) # [N,1,77,2048]
+    pool_cs = torch.cat(pool_cs).unsqueeze(1) # [N,1,1280]
+    count = len(cs)
     
     img_conds = []
     if isset(a, 'img_ref'):
@@ -312,7 +311,6 @@ def main():
             time_ids = torch.cat([time_ids]*2, dim=0) # [2,6]
         c_ = c_.to(device)
         pool_c = pool_c.to(device)
-        time_ids = time_ids.repeat(a.num, 1)
         image = sd.generate(z_, c_, pool_c, time_ids, a.cfg_scale, c_img, cnimg)
         return image
 
@@ -332,6 +330,8 @@ def main():
                 file_out = '%03d-%s-%d' % (i, log, sd.seed)
 
             images = genmix(i, **gendict)
+            torch.cuda.empty_cache()
+
             if a.verbose: cvshow(np.array(images.permute(0,2,3,1)[0] *.5 + .5))
             if len(images) > 1:
                 for j in range(len(images)):
