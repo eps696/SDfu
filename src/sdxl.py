@@ -65,6 +65,7 @@ class SDfu:
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
         if not isset(a, 'in_img'): a.strength = 1.
+        a.unprompt = unprompt(a)
         
         def get_model(name, url):
             return os.path.join(a.models_dir, name) if os.path.exists(os.path.join(a.models_dir, name)) else url
@@ -260,12 +261,11 @@ def main():
     if a.verbose: print(' sd xl ..', a.steps, '..', a.cfg_scale, '..', a.strength, '..', a.seed)
     gendict = {}
 
-    un = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
     prompts, texts = read_multitext(a.in_txt, a.pretxt, a.postxt)
     cs, pool_cs = [], []
     for prompt_ in prompts:
         p1, p2 = prompt_ if len(prompt_)==2 else prompt_ * 2
-        c_, uc, pool_c, pool_uc = sd.encode_prompt(p1, p2, un, un, do_cfg, a.num)
+        c_, uc, pool_c, pool_uc = sd.encode_prompt(p1, p2, a.unprompt, a.unprompt, do_cfg, a.num)
         cs.append(c_)
         pool_cs.append(pool_c)
     cs = torch.cat(cs).unsqueeze(1) # [N,1,77,2048]

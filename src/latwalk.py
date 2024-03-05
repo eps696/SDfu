@@ -5,7 +5,7 @@ import pickle
 import torch
 
 from core.sdsetup import SDfu
-from core.args import main_args, unprompt
+from core.args import main_args
 from core.text import multiprompt
 from core.utils import load_img, save_img, slerp, lerp, blend, calc_size, isset, read_latents, img_list, basename, progbar, cvshow, save_cfg
 
@@ -61,7 +61,6 @@ def main():
 
     a.model = basename(a.model)
     a.seed = sd.seed
-    a.unprompt = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
     os.makedirs(a.out_dir, exist_ok=True)
     if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
     if a.verbose: save_cfg(a, a.out_dir)

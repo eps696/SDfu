@@ -368,8 +368,8 @@ class LatentBlending():
         if np.sum(list_mixing_coeffs) > 0:
             assert len(lats_mixing) == self.steps
 
-        if self.isxl or self.sd.a.sampler == 'lcm' or self.sd.a.model == 'lcm':
-            self.sd.set_steps(self.sd.a.steps, self.sd.a.strength) # trailing (lcm) scheduler requires reset on every generation
+        if self.sd.use_kdiff or self.isxl or self.use_lcm: # trailing (lcm) or k- schedulers require reset on every generation
+            self.set_steps(self.sd.a.steps, self.sd.a.strength)
 
         self.run_scope = nullcontext # torch.autocast
         with self.run_scope("cuda"):
@@ -389,47 +389,15 @@ class LatentBlending():
 
                 if self.isxl:
                     lat = self.xl_step(lat, cond, pool_c, im_cond, self.sd.timesteps[i])
-                elif self.sd.a.sampler == 'euler':
-                    lat = self.euler_step(lat, cond, im_cond, self.sd.sigmas, i)
-                else: # ddim
+                else:
                     lat = self.ddim_step(lat, cond, im_cond, self.sd.timesteps[i])
 
                 lats_out.append(lat.clone())
 
             return lats_out
 
-    def euler_step(self, lat, cond, im_cond, sigmas, i, verbose=True):
-        with self.run_scope("cuda"):
-            sigma = sigmas[i]
-            t = sigma * lat.new_ones([lat.shape[0]])
-            ukwargs = {}
-            if self.cfg_scale > 0:
-                if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
-                    cond, cond2, mix = cond
-                    bs = len(cond)*2 + 1
-                    cond_in = torch.cat([self.uc, cond, cond2])
-                else:
-                    mix = 0.
-                    bs = len(cond) + 1
-                    cond_in = torch.cat([self.uc, cond])
-                lat_in = torch.cat([lat] * bs)
-                if im_cond is not None: # encoded img for ip adapter
-                    ukwargs['added_cond_kwargs'] = {"image_embeds": im_cond}
-                noises = self.sd.kdiff_model(lat_in, t, cond=cond_in, **ukwargs).chunk(bs)
-                denoised = noises[0] # uncond
-                for n in range(len(cond)): # multi guidance
-                    denoise_guide = noises[n+1] * (1.-mix) + noises[n+1+len(cond)] * mix - noises[0] if mix > 0 else noises[n+1] - noises[0]
-                    denoised = denoised + denoise_guide * self.cfg_scale * self.cws[n % len(self.cws)]
-            else: # no guidance
-                denoised = self.sd.kdiff_model(lat, t, cond=self.uc, **ukwargs)
-            d = (lat - denoised) / sigma
-            dt = sigmas[i + 1] - sigma
-            lat = lat + d * dt # Euler method
-        return lat
-
     def ddim_step(self, lat, cond, im_cond, t, verbose=True):
         with self.run_scope("cuda"):
-            lat = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers!?
             if self.cfg_scale > 0:
                 if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
                     cond, cond2, mix = cond
@@ -439,7 +407,7 @@ class LatentBlending():
                     mix = 0.
                     bs = len(cond) + 1
                     cond_in = torch.cat([self.uc, cond])
-                lat_in = torch.cat([lat] * bs)
+                lat_in = torch.cat([self.sd.scheduler.scale_model_input(lat.cuda(), t)] * bs) # scaling only k-samplers
 
                 ukwargs = {}
                 if self.sd.use_cnet and self.cnimg is not None: # controlnet
@@ -457,12 +425,12 @@ class LatentBlending():
                     noise_pred = noise_pred + noise_guide * self.cfg_scale * self.cws[n % len(self.cws)]
             else: # no guidance, no controlnet
                 noise_pred = self.sd.unet(lat, t, self.uc).sample
-            lat = self.sd.scheduler.step(noise_pred, t, lat, **self.sd.sched_kwargs).prev_sample.cuda().half()
+            lat = self.sd.scheduler.step(noise_pred, t, lat, **self.sd.sched_kwargs).prev_sample
         return lat
 
     def xl_step(self, lat, cond, pool_c, im_cond, t, verbose=True):
         with self.run_scope("cuda"):
-            lat_in = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers!?
+            lat_in = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scaling only k-samplers
             if not self.cfg_scale in [0,1]:
                 cond = torch.cat([self.uc, cond])
                 pool_c = torch.cat([self.pool_uc, pool_c])

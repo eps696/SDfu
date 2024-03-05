@@ -155,7 +155,7 @@ def save_img(image, num, out_dir, prefix='', filepath=None, ext='jpg'):
     if filepath is None: filepath = '%05d.%s' % (num, ext)
     Image.fromarray(image.astype(np.uint8)).save(os.path.join(out_dir, prefix + filepath), quality=95, subsampling=0)
 
-def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, tensor=True, model_path='models/clipseg/rd64-uni.pth'):
+def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, tensor=True, model_path='models/xtra/clipseg/rd64-uni.pth'):
     if os.path.isfile(mask_str): 
         mask, _ = load_img(mask_str, tensor=False)
         mask = ImageOps.invert(mask.convert('L'))

@@ -72,7 +72,7 @@ class SegmentedGrayscale(object):
 
 class Txt2Mask(object):
     ''' Create new Txt2Mask object. The optional device argument can be one of 'cuda', 'mps' or 'cpu' '''
-    def __init__(self, model_path='models/clipseg/rd64-uni.pth', device='cpu', refined=False):
+    def __init__(self, model_path='models/xtra/clipseg/rd64-uni.pth', device='cpu', refined=False):
         # print('>> Initializing clipseg model for text to mask inference')
         self.device = device
         self.model = CLIPDensePredT(version=CLIP_VERSION, reduce_dim=64, complex_trans_conv=refined)

@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 
 from core.sdsetup import SDfu
-from core.args import main_args, samplers, unprompt
+from core.args import main_args, samplers
 from core.text import multiprompt
 from core.utils import file_list, basename, progbar, save_cfg
 
@@ -53,9 +53,9 @@ def main():
 
         a.model = model
         sd = SDfu(a)
+        a = sd.a
         a.seed = sd.seed # to keep it further
         csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
-        a.unprompt = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
         uc = multiprompt(sd, a.unprompt)[0][0]
         if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', strength, '..', sd.seed)
 

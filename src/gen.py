@@ -5,7 +5,7 @@ os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
 import torch
 
 from core.sdsetup import SDfu, device
-from core.args import main_args, samplers, unprompt
+from core.args import main_args, samplers
 from core.text import read_txt, multiprompt
 from core.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar, save_cfg
 
@@ -22,7 +22,6 @@ def main():
 
     a.model = basename(a.model)
     a.seed = sd.seed
-    a.unprompt = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
     posttxt = basename(a.in_txt) if isset(a, 'in_txt') and os.path.exists(a.in_txt) else ''
     postimg = basename(a.in_img) if isset(a, 'in_img') and os.path.isdir(a.in_img)  else ''
     if isok(posttxt) or isok(postimg):

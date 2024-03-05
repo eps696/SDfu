@@ -12,7 +12,7 @@ from torchvision.io import write_video
 from diffusers import DDIMScheduler
 
 from core.sdsetup import SDfu
-from core.args import main_args, unprompt
+from core.args import main_args
 from core.utils import load_img, isset, img_list, file_list, save_cfg, basename, progbar
 from core.tokenflow_utils import reg_var, get_var, reg_time, reg_extended_attention_pnp, reg_conv_injection, set_tokenflow, reg_extended_attention
 
@@ -293,14 +293,14 @@ def main():
     assert os.path.isdir(a.in_img), "!! Images %s not found !!" % a.in_img
     if not isset(a, 'batch_size'): a.batch_size = len(img_list(a.in_img))
 
+    sd = SDfu(a)
+    a = sd.a
+
     a.lat_dir = os.path.join(a.out_dir, 'lats')
     a.lat_steps = a.steps # or can be 10 x steps
     os.makedirs(a.out_dir, exist_ok=True)
     save_cfg(a, a.out_dir)
     seed_everything(a.seed)
-    a.unprompt = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
-
-    sd = SDfu(a)
 
     count = int(math.ceil(len(img_list(a.in_img)) / a.max_len))
     print(count, 'chunks')

@@ -17,7 +17,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 
 from .text import multiprompt
 from .utils import load_img, makemask, isok, isset, progbar, file_list
-from .args import models
+from .args import models, unprompt
 
 import logging
 logging.getLogger('diffusers').setLevel(logging.ERROR)
@@ -39,19 +39,6 @@ class SDpipe(StableDiffusionPipeline):
         if image_encoder is not None:
             self.register_modules(image_encoder=image_encoder)
 
-class ModelWrapper: # for k-sampling
-    def __init__(self, model, alphas_cumprod):
-        self.model = model
-        self.alphas_cumprod = alphas_cumprod
-    def apply_model(self, *args, **kwargs):
-        if len(args) == 3:
-            conds = args[-1]
-            args = args[:2]
-        if kwargs.get("cond", None) is not None:
-            conds = kwargs.pop("cond")
-        return self.model(*args, encoder_hidden_states=conds, **kwargs).sample
-
-
 class SDfu:
     def __init__(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # settings
@@ -60,6 +47,7 @@ class SDfu:
         self.run_scope = nullcontext # torch.autocast
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
+        a.unprompt = unprompt(a)
 
         self.use_lcm = False
         if a.model == 'lcm':
@@ -75,7 +63,6 @@ class SDfu:
             self.load_model_external(a.model)
         if not self.a.lowmem: self.pipe.to(device)
         self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
-        assert not (isset(a, 'control_mod') and self.use_kdiff), "Controlnet not supported for k-samplers here"
 
         # load finetuned stuff
         mod_tokens = None
@@ -108,7 +95,7 @@ class SDfu:
 
         # load animatediff = before ip adapter, after custom diffusion !
         if isset(a, 'animdiff'):
-            if not os.path.exists(a.animdiff): a.animdiff = os.path.join(a.maindir, 'anima')
+            if not os.path.exists(a.animdiff): a.animdiff = os.path.join(a.maindir, a.animdiff)
             assert os.path.exists(a.animdiff), "Not found AnimateDiff model %s" % a.animdiff
             if a.verbose: print(' loading AnimateDiff', a.animdiff)
             from diffusers.models import UNetMotionModel, MotionAdapter
@@ -143,7 +130,7 @@ class SDfu:
 
     def load_model_custom(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # paths
-        self.clipseg_path = os.path.join(a.maindir, 'clipseg/rd64-uni.pth')
+        self.clipseg_path = os.path.join(a.maindir, 'xtra/clipseg/rd64-uni.pth')
         vtype  = a.model[-1] == 'v'
         vidtype = a.model[0] == 'v'
         self.subdir = 'v2v' if vtype else 'v2' if vidtype or a.model[0]=='2' else 'v1'
@@ -193,36 +180,31 @@ class SDfu:
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
         if not os.path.exists(sched_path):
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
-        self.sched_kwargs = {}
+        self.sched_kwargs = {"eta": a.ddim_eta} if a.sampler == 'ddim' else {}
         if a.sampler == 'lcm':
             from diffusers.schedulers import LCMScheduler
             scheduler = LCMScheduler.from_pretrained(os.path.join(a.maindir, 'lcm/scheduler/scheduler_config.json'))
-        elif a.sampler == 'pndm':
-            from diffusers.schedulers import PNDMScheduler
-            scheduler = PNDMScheduler.from_pretrained(sched_path)
         elif a.sampler == 'dpm':
             from diffusers.schedulers import DPMSolverMultistepScheduler
             scheduler = DPMSolverMultistepScheduler(beta_start=0.0001, beta_end=0.02, beta_schedule="scaled_linear", solver_order=2, sample_max_value=1.)
-        elif a.sampler == 'uni':
-            from diffusers.schedulers import UniPCMultistepScheduler
-            scheduler = UniPCMultistepScheduler.from_pretrained(sched_path)
-        elif a.sampler == 'ddim':
-            from diffusers.schedulers import DDIMScheduler
-            scheduler = DDIMScheduler.from_pretrained(sched_path)
-            self.sched_kwargs = {"eta": a.ddim_eta}
         else:
-            from diffusers.schedulers import LMSDiscreteScheduler
-            import k_diffusion as K
-            scheduler = LMSDiscreteScheduler.from_pretrained(sched_path)
-            model = ModelWrapper(self.unet, scheduler.alphas_cumprod)
-            self.kdiff_model = K.external.CompVisVDenoiser(model) if vtype else K.external.CompVisDenoiser(model)
-            self.kdiff_model.sigmas     = self.kdiff_model.sigmas.to(device)
-            self.kdiff_model.log_sigmas = self.kdiff_model.log_sigmas.to(device)
-            if   a.sampler == 'klms':    self.sampling_fn = K.sampling.sample_lms
-            elif a.sampler == 'euler':   self.sampling_fn = K.sampling.sample_euler
-            elif a.sampler == 'euler_a': self.sampling_fn = K.sampling.sample_euler_ancestral
-            elif a.sampler == 'dpm2_a':  self.sampling_fn = K.sampling.sample_dpm_2_ancestral # slow but rich!
-            else: print(' Unknown sampler', a.sampler); exit()
+            if a.sampler == 'ddim':
+                from diffusers.schedulers import DDIMScheduler as Sched
+            elif a.sampler == 'pndm':
+                from diffusers.schedulers import PNDMScheduler as Sched
+            elif a.sampler == 'euler':
+                from diffusers.schedulers import EulerDiscreteScheduler as Sched
+            elif a.sampler == 'euler_a':
+                from diffusers.schedulers import EulerAncestralDiscreteScheduler as Sched
+            elif a.sampler == 'ddpm':
+                from diffusers.schedulers import DDPMScheduler as Sched
+            elif a.sampler == 'uni':
+                from diffusers.schedulers import UniPCMultistepScheduler as Sched
+            elif a.sampler == 'lms':
+                from diffusers.schedulers import LMSDiscreteScheduler as Sched
+            else:
+                print(' Unknown sampler', a.sampler); exit()
+            scheduler = Sched.from_pretrained(sched_path)
         return scheduler
 
     def final_setup(self, a):
@@ -274,11 +256,8 @@ class SDfu:
         else:
             self.scheduler.set_timesteps(steps, device=device)
             steps = min(int(steps * strength), steps) # t_enc .. 50
-            if self.use_kdiff:
-                self.sigmas = self.scheduler.sigmas[-steps - warmup :]
-            else:
-                self.timesteps = self.scheduler.timesteps[-steps - warmup :] # 1 warmup step
-                self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
+            self.timesteps = self.scheduler.timesteps[-steps - warmup :] # 1 warmup step
+            self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
 
     def next_step_ddim(self, noise, t, sample):
         t, next_t = min(t - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), t
@@ -333,12 +312,9 @@ class SDfu:
                 lat = self.next_step_ddim(noise_pred, t, lat)
         return lat
 
-    def lat_z(self, lat):
+    def lat_z(self, lat): # ddim stochastic encode, fast, not exact
         with self.run_scope('cuda'):
-            if self.use_kdiff: # k-samplers, fast, not exact
-                return lat + torch.randn_like(lat) * self.sigmas[0]
-            else: # ddim stochastic encode, fast, not exact
-                return self.scheduler.add_noise(lat, torch.randn(lat.shape, generator=self.g_, device=device, dtype=lat.dtype), self.lat_timestep)
+            return self.scheduler.add_noise(lat, torch.randn(lat.shape, generator=self.g_, device=device, dtype=lat.dtype), self.lat_timestep)
 
     def img_z(self, image):
         return self.lat_z(self.img_lat(image))
@@ -370,9 +346,43 @@ class SDfu:
         dd = 2. * (dd - depth_min) / (depth_max - depth_min) - 1.
         return {'depth': dd} # [1,1,64,64]
 
+    def sag_masking(self, orig_lats, attn_map, map_size, t, eps):
+        bh, hw1, hw2 = attn_map.shape # [8*f,h,w]
+        h = self.unet.config.attention_head_dim
+        if isinstance(h, list): h = h[-1]
+        if len(orig_lats.shape)==4:
+            orig_lats = orig_lats.unsqueeze(2) # make compatible with unet3D
+        b, ch, seq, lath, latw = orig_lats.shape # [b,4,f,h,w]
+        attn_map = attn_map.reshape(b * seq, h, hw1, hw2) # [b*f,8,144,144]
+        attn_mask = attn_map.mean(1, keepdim=False).sum(1, keepdim=False) > 1.0 # [b*f,144]
+        attn_mask = attn_mask.reshape(b, seq, map_size[0], map_size[1]).unsqueeze(1).repeat(1, ch, 1, 1, 1).type(attn_map.dtype) # [b,ch,f,12,12]
+        attn_mask = torch.stack([F.interpolate(attn_mask[:,:,i], (lath, latw)) for i in range(seq)]).permute(1,2,0,3,4)
+        degraded_lats = torch.stack([gaussian_blur_2d(orig_lats[:,:,i], kernel_size=9, sigma=1.0) for i in range(seq)]).permute(1,2,0,3,4)
+        degraded_lats = degraded_lats * attn_mask + orig_lats * (1 - attn_mask)
+        if len(eps.shape) < len(degraded_lats.shape):
+            degraded_lats = degraded_lats.squeeze(2) # get back to unet2D
+        degraded_lats = self.scheduler.add_noise(degraded_lats, noise=eps, timesteps=t[None]) # Noise it again to match the noise level
+        return degraded_lats
+
+    def pred_x0(self, sample, model_output, timestep): # from DDIMScheduler.step
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep.cpu().to(dtype=torch.int32)].to(sample.device)
+        beta_prod_t = 1 - alpha_prod_t
+        pred_original_sample = (sample - beta_prod_t ** (0.5) * model_output) / alpha_prod_t ** (0.5)
+        return pred_original_sample
+
+
     def generate(self, lat, cs, uc, c_img=None, cfg_scale=None, cws=None, mask=None, masked_lat=None, depth=None, cnimg=None, ilat=None, offset=0, verbose=True):
         if cfg_scale is None: cfg_scale = self.a.cfg_scale
-        with torch.no_grad(), self.run_scope('cuda'):
+        if self.a.sag_scale > 0:
+            assert self.scheduler.config.prediction_type == "epsilon", "Only prediction_type 'epsilon' is implemented here"
+            store_processor = CrossAttnStoreProcessor()
+            self.unet.mid_block.attentions[0].transformer_blocks[0].attn1.processor = store_processor
+            map_size = None
+            def get_map_size(module, input, output):
+                nonlocal map_size
+                map_size = output[0].shape[-2:]
+        loop_context = self.unet.mid_block.attentions[0].register_forward_hook(get_map_size) if self.a.sag_scale > 0 else nullcontext() # SAG
+        with torch.no_grad(), self.run_scope('cuda'), loop_context:
             if cws is None or not len(cws) == len(cs): cws = [len(uc) / len(cs)] * len(cs)
             conds = uc if cfg_scale==0 else cs if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
@@ -381,142 +391,109 @@ class SDfu:
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
             if c_img is not None:  # already with uc_img
                 if len(cs) > 1 and len(c_img) == 2: c_img = c_img.repeat_interleave(len(cs), 0)
-                img_conds = c_img[len(c_img)//2:] if cfg_scale in [0,1] else c_img # only c if no scale, to keep correct shape
+                img_conds = c_img.chunk(2)[1] if cfg_scale in [0,1] else c_img # only c if no scale, to keep correct shape
+                img_uncond = c_img.chunk(2)[0]
                 if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
-            if self.use_lcm: # lcm scheduler requires reset on every generation
+            if self.use_kdiff or self.use_lcm or isset(self, 'isxl'): # trailing (lcm) or k- schedulers require reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
+            sagkwargs = {}
 
-            if self.use_kdiff:
-                def model_fn(x, t, tnum=0):
-                    x = x.half()
-                    ukwargs = {} # kwargs placeholder for unet
-                    if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
-                        x = torch.cat([x, 1.-mask, masked_lat], dim=1)
-                    elif isok(depth) and self.depthmod: # depth model
-                        x = torch.cat([x, depth], dim=1)
+            if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
+            for tnum, t in enumerate(self.timesteps[offset:]):
+                ukwargs = {} # kwargs placeholder for unet
+                lat_in = self.scheduler.scale_model_input(lat, t) # ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
 
-                    x, t = torch.cat([x] * bs), torch.cat([t] * bs) # expand latents for guidance
+                if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
+                    lat_in = torch.cat([lat_in, 1.-mask, masked_lat], dim=1)
+                elif isok(depth) and self.depthmod: # depth model
+                    lat_in = torch.cat([lat_in, depth], dim=1)
 
-                    if c_img is not None: # encoded img for ip adapter
-                        ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
+                lat_in = torch.cat([lat_in] * bs) # expand latents for guidance
 
-                    def calc_pred(x, t, conds, ukwargs={}):
-                        if cfg_scale in [0, 1]:
-                            pred = self.kdiff_model(x, t, cond=conds, **ukwargs)
-                        elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
-                            preds = self.kdiff_model(torch.cat([x, ilat], dim=1), t, cond=conds).chunk(bs)
-                            pred = preds[0] + self.a.img_scale * (preds[1] - preds[0]) # uncond + image guidance
-                            for n in range(len(preds)-2):
-                                pred = pred + (preds[n+2] - preds[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
+                if c_img is not None: # encoded img for ip adapter
+                    ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
+                    if self.a.sag_scale > 0:
+                        sagkwargs['added_cond_kwargs'] = {"image_embeds": img_conds} if cfg_scale in [0,1] else {"image_embeds": img_uncond}
+
+                def calc_noise(x, t, conds, ukwargs={}):
+                    if cfg_scale in [0, 1]:
+                        noise_pred = self.unet(x, t, conds, **ukwargs).sample
+                    elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
+                        noises = self.unet(torch.cat([x, ilat], dim=1), t, conds).sample.chunk(bs)
+                        noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
+                        for n in range(len(noises)-2):
+                            noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
+                    else:
+                        noises = self.unet(x, t, conds, **ukwargs).sample.chunk(bs) # pred noise residual at step t
+                        noise_pred = noises[0] # uncond
+                        for n in range(len(noises)-1):
+                            noise_pred = noise_pred + (noises[n+1] - noises[0]) * cfg_scale * cws[n % len(cws)] # prompt guidance
+                    if self.a.sag_scale > 0:
+                        if cfg_scale in [0,1]:
+                            pred_x0 = self.pred_x0(x[:1], noise_pred, t) # DDIM-like prediction of x0
+                            cond_attn = store_processor.attention_probs # get the stored attention maps
+                            degraded_lats = self.sag_masking(pred_x0, cond_attn, map_size, t, noise_pred)
+                            degraded_pred = self.unet(degraded_lats, t, conds, **sagkwargs).sample
+                            noise_pred += self.a.sag_scale * (noise_pred - degraded_pred)
                         else:
-                            preds = self.kdiff_model(x, t, cond=conds, **ukwargs).chunk(bs)
-                            pred = preds[0] # uncond
-                            for n in range(len(preds)-1):
-                                pred = pred + (preds[n+1] - preds[0]) * cfg_scale * cws[n % len(cws)] # prompt guidance
-                        return pred
+                            pred_x0 = self.pred_x0(x[:1], noises[0], t) # DDIM-like prediction of x0
+                            uncond_attn, cond_attn = store_processor.attention_probs.chunk(2) # get the stored attention maps
+                            degraded_lats = self.sag_masking(pred_x0, uncond_attn, map_size, t, noise_pred)
+                            degraded_pred = self.unet(degraded_lats, t, conds.chunk(2)[0], **sagkwargs).sample
+                            noise_pred += self.a.sag_scale * (noises[0] - degraded_pred)
+                    return noise_pred
 
-                    if len(x.shape)==4: # unet2D [b,c,h,w]
-                        pred = calc_pred(x, t, conds, ukwargs)
-                    else: # unet3D [b,c,f,h,w]
-                        frames = x.shape[2]
-                        if frames > self.a.ctx_frames: # sliding sampling for long videos
-                            pred = torch.zeros_like(x[:1])
-                            slide_count = torch.zeros((1, 1, x.shape[2], 1, 1), device=x.device)
-                            for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
-                                conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
-                                if c_img is not None: # ip adapter
-                                    ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(2)])
-                                pred_sub = calc_pred(x[:,:,slids], t, conds_, ukwargs)
-                                pred[:,:,slids] += pred_sub
-                                slide_count[:,:,slids] += 1  # increment which indices were used
-                            pred /= slide_count
-                        else: # single context video
-                            pred = calc_pred(x, t, conds, ukwargs)
+                def calc_cnet_batch(x, t, conds, cnimg):
+                    bx = rearrange(x, 'b c f h w -> (b f) c h w' ) # bs repeat, frames interleave
+                    if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                        self.unet.to("cpu"); torch.cuda.empty_cache()
+                    ctl_downs, ctl_mid = self.cnet(bx, t, conds, cnimg.repeat(bs,1,1,1), self.a.control_scale, return_dict=False)
+                    if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                        self.cnet.to("cpu"); torch.cuda.empty_cache()
+                    return ctl_downs, ctl_mid
 
-                    return pred
-
-                lat = self.sampling_fn(model_fn, lat, self.sigmas[offset:], disable = not verbose)
-                if verbose and not iscolab: print() # compensate pbar printout
-
-            else:
-                if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
-                for tnum, t in enumerate(self.timesteps[offset:]):
-                    ukwargs = {} # kwargs placeholder for unet
-                    lat_in = self.scheduler.scale_model_input(lat, t) # ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
-
-                    if isok(mask, masked_lat) and self.inpaintmod: # inpaint with rml model
-                        lat_in = torch.cat([lat_in, 1.-mask, masked_lat], dim=1)
-                    elif isok(depth) and self.depthmod: # depth model
-                        lat_in = torch.cat([lat_in, depth], dim=1)
-
-                    lat_in = torch.cat([lat_in] * bs) # expand latents for guidance
-
-                    if c_img is not None: # encoded img for ip adapter
-                        ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
-
-                    def calc_noise(x, t, conds, ukwargs={}):
-                        if cfg_scale in [0, 1]:
-                            noise_pred = self.unet(x, t, conds, **ukwargs).sample
-                        elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
-                            noises = self.unet(torch.cat([x, ilat], dim=1), t, conds).sample.chunk(bs)
-                            noise_pred = noises[0] + self.a.img_scale * (noises[1] - noises[0]) # uncond + image guidance
-                            for n in range(len(noises)-2):
-                                noise_pred = noise_pred + (noises[n+2] - noises[1]) * cfg_scale * cws[n % len(cws)] # prompt guidance
-                        else:
-                            noises = self.unet(x, t, conds, **ukwargs).sample.chunk(bs) # pred noise residual at step t
-                            noise_pred = noises[0] # uncond
-                            for n in range(len(noises)-1):
-                                noise_pred = noise_pred + (noises[n+1] - noises[0]) * cfg_scale * cws[n % len(cws)] # prompt guidance
-                        return noise_pred
-
-                    def calc_cnet_batch(x, t, conds, cnimg):
-                        bx = rearrange(x, 'b c f h w -> (b f) c h w' ) # bs repeat, frames interleave
+                if len(lat_in.shape)==4: # unet2D [b,c,h,w]
+                    if self.use_cnet and cnimg is not None: # controlnet = max 960x640 or 768 on 16gb
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.unet.to("cpu"); torch.cuda.empty_cache()
-                        ctl_downs, ctl_mid = self.cnet(bx, t, conds, cnimg.repeat(bs,1,1,1), self.a.control_scale, return_dict=False)
+                        ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, self.a.control_scale, return_dict=False)
+                        ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.cnet.to("cpu"); torch.cuda.empty_cache()
-                        return ctl_downs, ctl_mid
+                    noise_pred = calc_noise(lat_in, t, conds, ukwargs)
 
-                    if len(lat_in.shape)==4: # unet2D [b,c,h,w]
-                        if self.use_cnet and cnimg is not None: # controlnet = max 960x640 or 768 on 16gb
-                            if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-                                self.unet.to("cpu"); torch.cuda.empty_cache()
-                            ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, self.a.control_scale, return_dict=False)
+                else: # unet3D [b,c,f,h,w]
+                    frames = lat_in.shape[2]
+                    if frames > self.a.ctx_frames: # sliding sampling for long videos
+                        noise_pred = torch.zeros_like(lat)
+                        slide_count = torch.zeros((1, 1, lat_in.shape[2], 1, 1), device=lat_in.device)
+                        for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
+                            conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
+                            if c_img is not None: # ip adapter
+                                ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(2)])
+                                if self.a.sag_scale > 0:
+                                    imcc = img_conds if cfg_scale in [0,1] else img_uncond
+                                    sagkwargs['added_cond_kwargs']['image_embeds'] = [imcond[slids] for imcond in imcc]
+                            if self.use_cnet and cnimg is not None: # controlnet
+                                ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds_, cnimg[slids])
+                                ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                            noise_pred_sub = calc_noise(lat_in[:,:,slids], t, conds_, ukwargs)
+                            noise_pred[:,:,slids] += noise_pred_sub
+                            slide_count[:,:,slids] += 1  # increment which indices were used
+                        noise_pred /= slide_count
+
+                    else: # single context video
+                        if self.use_cnet and cnimg is not None: # controlnet
+                            ctl_downs, ctl_mid = calc_cnet_batch(lat_in, t, conds, cnimg)
                             ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
-                            if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-                                self.cnet.to("cpu"); torch.cuda.empty_cache()
                         noise_pred = calc_noise(lat_in, t, conds, ukwargs)
 
-                    else: # unet3D [b,c,f,h,w]
-                        frames = lat_in.shape[2]
-                        if frames > self.a.ctx_frames: # sliding sampling for long videos
-                            noise_pred = torch.zeros_like(lat)
-                            slide_count = torch.zeros((1, 1, lat_in.shape[2], 1, 1), device=lat_in.device)
-                            for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
-                                conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
-                                if c_img is not None: # ip adapter
-                                    ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(2)])
-                                if self.use_cnet and cnimg is not None: # controlnet
-                                    ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds_, cnimg[slids])
-                                    ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
-                                noise_pred_sub = calc_noise(lat_in[:,:,slids], t, conds_, ukwargs)
-                                noise_pred[:,:,slids] += noise_pred_sub
-                                slide_count[:,:,slids] += 1  # increment which indices were used
-                            noise_pred /= slide_count
+                if self.use_lcm:
+                    lat, latend = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs, return_dict=False)
+                else:
+                    lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
 
-                        else: # single context video
-                            if self.use_cnet and cnimg is not None: # controlnet
-                                ctl_downs, ctl_mid = calc_cnet_batch(lat_in, t, conds, cnimg)
-                                ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
-                            noise_pred = calc_noise(lat_in, t, conds, ukwargs)
-
-                    if self.use_lcm:
-                        lat, latend = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs, return_dict=False)
-                    else:
-                        lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
-
-                    if verbose and not iscolab: pbar.upd()
+                if verbose and not iscolab: pbar.upd()
 
             if self.use_lcm:
                 lat = latend
@@ -563,4 +540,40 @@ def uniform_slide(step, num_frames, ctx_size=16, ctx_stride=1, ctx_overlap=4, lo
         fstep = ctx_size * ctx_step - ctx_overlap
         for j in range(fstart, fstop, fstep):
             yield [e % num_frames for e in range(j, j + ctx_size * ctx_step, ctx_step)]
+
+class CrossAttnStoreProcessor: # processes and stores attention probabilities
+    def __init__(self):
+        self.attention_probs = None
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None):
+        batch_size, sequence_length, _ = hidden_states.shape
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        query = attn.to_q(hidden_states)
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        elif attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+        self.attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        hidden_states = torch.bmm(self.attention_probs, value)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states) # linear proj
+        hidden_states = attn.to_out[1](hidden_states) # dropout
+        return hidden_states
+
+def gaussian_blur_2d(img, kernel_size, sigma):
+    ksize_half = (kernel_size - 1) * 0.5
+    x = torch.linspace(-ksize_half, ksize_half, steps=kernel_size)
+    pdf = torch.exp(-0.5 * (x / sigma).pow(2))
+    x_kernel = pdf / pdf.sum()
+    x_kernel = x_kernel.to(device=img.device, dtype=img.dtype)
+    kernel2d = torch.mm(x_kernel[:, None], x_kernel[None, :])
+    kernel2d = kernel2d.expand(img.shape[-3], 1, kernel2d.shape[0], kernel2d.shape[1])
+    padding = [kernel_size // 2, kernel_size // 2, kernel_size // 2, kernel_size // 2]
+    img = F.pad(img, padding, mode="reflect")
+    img = F.conv2d(img, kernel2d, groups=img.shape[-3])
+    return img
 

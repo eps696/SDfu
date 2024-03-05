@@ -8,7 +8,7 @@ import torch
 
 from diffusers import DiffusionPipeline
 
-from core.args import main_args
+from core.args import main_args, unprompt
 from core.text import read_txt, txt_clean
 from core.utils import load_img, makemask, blend, cvshow, calc_size, isok, isset, img_list, basename, progbar, save_cfg
 
@@ -28,9 +28,6 @@ def get_args(parser):
     parser.add_argument('-rl', '--load_lora', default=None, help='UNUSED')
     parser.add_argument('-b',  '--batch',   default=None, help='UNUSED')
     return parser.parse_args()
-
-unprompt = "low quality, poorly drawn, out of focus, blurry, tiled, segmented, oversaturated"
-unprompt += ", ugly, deformed, disfigured, mutated, mutilated, bad anatomy, malformed hands, extra limbs"
 
 def parse_line(txt):
     subs = []
@@ -79,7 +76,7 @@ def main():
     if a.verbose: print(' kandinsky ..', a.cfg_scale, '..', a.strength, '..', a.seed)
 
     prompts, texts = read_multitext(a.in_txt, a.pretxt, a.postxt)
-    un = '' if a.unprompt=='no' else unprompt if a.unprompt is None else ', '.join([unprompt, a.unprompt])
+    un = unprompt(a)
     count = len(prompts)
 
     # prior pipe
@@ -116,7 +113,7 @@ def main():
         count = max(count, len(img_paths))
     if isset(a, 'mask'):
         masks = img_list(a.mask) if os.path.isdir(a.mask) else read_txt(a.mask)
-        clipseg_path = os.path.join(a.maindir, 'clipseg/rd64-uni.pth')
+        clipseg_path = os.path.join(a.maindir, 'xtra/clipseg/rd64-uni.pth')
     if isset(a, 'control_img'):
         assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
         cimg_paths = img_list(a.control_img) if os.path.isdir(a.control_img) else [a.control_img]

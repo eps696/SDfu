@@ -1,12 +1,16 @@
 import argparse
 
-samplers = ['klms', 'uni', 'pndm', 'dpm', 'euler_a', 'dpm2_a',   'ddim', 'euler']
+samplers = ['ddim', 'pndm', 'lms', 'euler', 'euler_a', 'uni', 'dpm', 'ddpm',  'lcm', 'orig']
 models = ['lcm', '15', '15drm', '1p2p', '2i', '21', '21v', 'vzs', 'vpot'] # lcm, 15, 15drm are uncensored
-unprompt = ""
-unprompt = "low quality, poorly drawn, out of focus, blurry, tiled, segmented, oversaturated"
-# unprompt += ", letters, text, titles, graffiti, typography, watermarks, writings"
-# unprompt += ", human, people, man, girl, face"
-# unprompt += ", ugly, deformed, disfigured, mutated, mutilated, bad anatomy, malformed hands, extra limbs"
+un = ""
+un = "low quality, poorly drawn, out of focus, blurry, tiled, segmented, oversaturated"
+# un += ", letters, text, titles, graffiti, typography, watermarks, writings"
+# un += ", human, people, man, girl, face"
+# un += ", ugly, deformed, disfigured, mutated, mutilated, bad anatomy, malformed hands, extra limbs"
+
+def unprompt(args):
+    una = args.unprompt
+    return un if una is None else '' if una=='no' else una if una[-1]=='.' else un + una if una[0]==',' else ', '.join([una, un])
 
 def main_args():
     parser = argparse.ArgumentParser(conflict_handler = 'resolve')
@@ -26,7 +30,7 @@ def main_args():
     parser.add_argument('-sm', '--sampler', default='ddim', choices=samplers)
     parser.add_argument(       '--vae',     default='ema', help='orig, ema, mse')
     parser.add_argument('-C','--cfg_scale', default=7.5, type=float, help="prompt guidance scale")
-    parser.add_argument('-f', '--strength', default=0.75, type=float, help="strength of image processing. 0 = preserve img, 1 = replace it completely")
+    parser.add_argument('-f', '--strength', default=1, type=float, help="strength of image processing. 0 = preserve img, 1 = replace it completely")
     parser.add_argument('-if', '--img_scale', default=None, type=float, help='image guidance scale for Instruct pix2pix. None = disabled it')
     parser.add_argument(      '--ddim_eta', default=0., type=float)
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
@@ -45,6 +49,7 @@ def main_args():
     # misc
     parser.add_argument('-cg', '--cguide',  action='store_true', help='Use noise guidance for interpolation, instead of cond lerp')
     parser.add_argument('-fu',  '--freeu',  action='store_true', help='Use FreeU enhancement (Fourier representations in Unet)')
+    parser.add_argument('-sag','--sag_scale', default=0, type=float, help="Self-attention guidance scale")
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
     parser.add_argument('-lo', '--lowmem',  action='store_true', help='Offload subnets onto CPU for higher resolution [slower]')
     parser.add_argument('-inv', '--invert_mask', action='store_true')
