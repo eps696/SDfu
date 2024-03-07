@@ -16,7 +16,7 @@ from diffusers.utils import is_accelerate_available, is_accelerate_version
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 
 from .text import multiprompt
-from .utils import load_img, makemask, isok, isset, progbar, file_list
+from .utils import img_list, load_img, makemask, isok, isset, progbar, file_list
 from .args import models, unprompt
 
 import logging

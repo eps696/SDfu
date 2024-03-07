@@ -15,7 +15,7 @@ from diffusers import DiffusionPipeline, AutoencoderKL, UNet2DConditionModel, Eu
 
 from core.args import main_args, unprompt
 from core.text import read_txt, txt_clean
-from core.utils import load_img, save_img, lerp, slerp, makemask, blend, cvshow, calc_size, isok, isset
+from core.utils import img_list, load_img, save_img, lerp, slerp, blend, basename, makemask, progbar, save_cfg, cvshow, calc_size, isok, isset
 
 try:
     import xformers; isxf = True
@@ -24,8 +24,6 @@ try: # colab
     get_ipython().__class__.__name__
     iscolab = True
 except: iscolab = False
-
-from eps import img_list, basename, progbar, save_cfg
 
 device = torch.device('cuda')
 
