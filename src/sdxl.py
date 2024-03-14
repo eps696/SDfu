@@ -112,6 +112,7 @@ class SDfu:
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
         self.res = self.unet.config.sample_size * self.vae_scale # original model resolution
+        self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
         self.set_steps(a.steps, a.strength)
 
     def setseed(self, seed=None):
