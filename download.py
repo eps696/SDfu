@@ -65,7 +65,7 @@ def main():
     get_model("https://www.dropbox.com/s/z9uycihl6tybx9y/sdfu-v1-vaes-fp16.zip?dl=1", 'models/v1')
 
     print(' downloading CLIPseg model')
-    get_model("https://www.dropbox.com/s/c0tduhr4g0al1cq/rd64-uni.pth?dl=1", 'models/clipseg', unzip=False)
+    get_model("https://www.dropbox.com/s/c0tduhr4g0al1cq/rd64-uni.pth?dl=1", 'models/xtra/clipseg', unzip=False)
 
 
 if __name__ == '__main__':
