@@ -473,7 +473,7 @@ class SDfu:
                                 ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(2)])
                                 if self.a.sag_scale > 0:
                                     imcc = img_conds if cfg_scale in [0,1] else img_uncond
-                                    sagkwargs['added_cond_kwargs']['image_embeds'] = [imcond[slids] for imcond in imcc]
+                                    sagkwargs['added_cond_kwargs']['image_embeds'] = imcc[slids]
                             if self.use_cnet and cnimg is not None: # controlnet
                                 ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds_, cnimg[slids])
                                 ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
