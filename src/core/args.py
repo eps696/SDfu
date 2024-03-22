@@ -1,6 +1,6 @@
 import argparse
 
-samplers = ['ddim', 'pndm', 'lms', 'euler', 'euler_a', 'uni', 'dpm', 'ddpm',  'lcm', 'orig']
+samplers = ['ddim', 'pndm', 'lms', 'euler', 'euler_a', 'uni', 'dpm', 'ddpm',  'lcm', 'tcd', 'orig']
 models = ['lcm', '15', '15drm', '1p2p', '2i', '21', '21v', 'vzs', 'vpot'] # lcm, 15, 15drm are uncensored
 un = ""
 un = "low quality, poorly drawn, out of focus, blurry, tiled, segmented, oversaturated"
@@ -32,7 +32,7 @@ def main_args():
     parser.add_argument('-C','--cfg_scale', default=7.5, type=float, help="prompt guidance scale")
     parser.add_argument('-f', '--strength', default=1, type=float, help="strength of image processing. 0 = preserve img, 1 = replace it completely")
     parser.add_argument('-if', '--img_scale', default=None, type=float, help='image guidance scale for Instruct pix2pix. None = disabled it')
-    parser.add_argument(      '--ddim_eta', default=0., type=float)
+    parser.add_argument('-eta','--eta',     default=0., type=float)
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
     parser.add_argument('-b',  '--batch',   default=1, type=int, help="batch size")
     parser.add_argument(   '--vae_batch',   default=8, type=int, help="batch size for VAE decoding")

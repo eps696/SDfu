@@ -11,7 +11,7 @@ import torch
 from safetensors.torch import load_file
 
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
-from diffusers import DiffusionPipeline, AutoencoderKL, UNet2DConditionModel, EulerDiscreteScheduler
+from diffusers import DiffusionPipeline, AutoencoderKL, UNet2DConditionModel
 
 from core.args import main_args, unprompt
 from core.text import read_txt, txt_clean
@@ -30,13 +30,14 @@ device = torch.device('cuda')
 def get_args(parser):
     parser.add_argument('-mdir', '--models_dir', default='models/xl')
     # parser.add_argument('-m',  '--model',   default='base', help='base or refiner')
+    parser.add_argument('-sm', '--sampler', default='euler')
     parser.add_argument('-lg',  '--lightning', action='store_true', help='Use SDXL-Lightning Unet')
     parser.add_argument('-fs', '--fstep',   default=1, type=int, help="number of frames for each interpolation step (1 = no interpolation)")
     parser.add_argument('-lb', '--latblend', default=0, type=float, help="Strength of latent blending, if > 0: 0.1 ~ alpha-blend, 0.9 ~ full rebuild")
     parser.add_argument('-cts', '--control_scale', default=0.5, type=float, help="ControlNet effect scale")
+    parser.add_argument('-eta','--eta',     default=0.3, type=float)
     parser.add_argument(       '--curve',   default='linear', help="Interpolating curve: bezier, parametric, custom or linear")
     # UNUSED
-    parser.add_argument('-sm', '--sampler', default=None)
     parser.add_argument(       '--vae',     default=None)
     parser.add_argument('-cg', '--cguide',  action=None)
     parser.add_argument('-lo', '--lowmem',  action=None)
@@ -64,6 +65,7 @@ class SDfu:
         self.setseed(a.seed if isset(a, 'seed') else None)
         if not isset(a, 'in_img'): a.strength = 1.
         a.unprompt = unprompt(a)
+        self.sched_kwargs = {}
         
         def get_model(name, url):
             return os.path.join(a.models_dir, name) if os.path.exists(os.path.join(a.models_dir, name)) else url
@@ -71,11 +73,17 @@ class SDfu:
         base_url = 'stabilityai/stable-diffusion-xl-base-1.0'
         self.pipe = DiffusionPipeline.from_pretrained(get_model('base', base_url), torch_dtype=torch.float16, variant="fp16")
         if a.lightning is True and a.steps in [2,4,8]: # lightning
-            a.cfg_scale = 0
-            self.pipe.scheduler = EulerDiscreteScheduler.from_config(get_model('base', base_url), subfolder='scheduler', timestep_spacing="trailing")
+            from diffusers.schedulers.scheduling_euler_discrete import EulerDiscreteScheduler
+            self.pipe.scheduler = EulerDiscreteScheduler.from_pretrained(get_model('base', base_url), subfolder='scheduler', timestep_spacing="trailing")
             unet_path = os.path.join(a.models_dir, 'sdxl_lightning_%dstep_unet.safetensors' % a.steps)
             if not os.path.exists(unet_path): unet_path = hf_hub_download('ByteDance/SDXL-Lightning', 'sdxl_lightning_%dstep_unet.safetensors' % a.steps)
             self.pipe.unet.load_state_dict(load_file(unet_path))
+            self.a.cfg_scale = 0
+        elif a.sampler.lower() == 'tcd':
+            from diffusers.schedulers.scheduling_tcd import TCDScheduler
+            self.pipe.scheduler = TCDScheduler.from_pretrained(get_model('base', base_url), subfolder='scheduler')
+            self.sched_kwargs = {"eta": a.eta}
+            self.a.cfg_scale = 0
         self.pipe.to(device)
         self.unet           = self.pipe.unet
         self.vae            = self.pipe.vae
@@ -84,6 +92,12 @@ class SDfu:
         self.text_encoder_2 = self.pipe.text_encoder_2
         self.tokenizer      = self.pipe.tokenizer
         self.tokenizer_2    = self.pipe.tokenizer_2
+
+        # load lora
+        if isset(a, 'load_lora'):
+            self.pipe.load_lora_weights(a.load_lora)
+            self.pipe.fuse_lora()
+            if a.verbose: print(' loaded LoRA', a.load_lora)
 
         # load controlnet
         if isset(a, 'control_mod'):
@@ -224,7 +238,7 @@ class SDfu:
                     cnkwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                 noise_pred = calc_noise(lat_in, t, conds, **ukwargs, **cnkwargs)
 
-                lat = self.scheduler.step(noise_pred, t, lat).prev_sample
+                lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample
 
                 if verbose and not iscolab: pbar.upd()
 

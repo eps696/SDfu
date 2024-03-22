@@ -66,11 +66,11 @@ class SDfu:
 
         # load finetuned stuff
         mod_tokens = None
-        if isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
-            self.pipe.load_lora_weights(a.load_lora, low_cpu_mem_usage=True)
-            self.pipe.fuse_lora()
-            if a.verbose: print(' loaded LoRA', a.load_lora)
-        elif isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
+        # if isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
+            # self.pipe.load_lora_weights(a.load_lora, low_cpu_mem_usage=True)
+            # self.pipe.fuse_lora()
+            # if a.verbose: print(' loaded LoRA', a.load_lora)
+        if isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
             from .finetune import load_delta, custom_diff
             self.pipe.unet = custom_diff(self.pipe.unet, train=False)
             mod_tokens = load_delta(torch.load(a.load_custom), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
@@ -103,7 +103,15 @@ class SDfu:
             self.unet = UNetMotionModel.from_unet2d(self.unet, motion_adapter)
             self.scheduler = self.set_scheduler(a) # k-samplers must be loaded after unet
             if not self.a.lowmem: self.unet.to(device)
-            self.pipe.register_modules(unet = self.unet, motion_adapter = motion_adapter)
+            self.pipe.register_modules(unet = self.unet)
+
+        if isset(a, 'load_lora'): # lora = after animdiff !
+            self.pipe.load_lora_weights(a.load_lora, low_cpu_mem_usage=True)
+            self.pipe.fuse_lora() # (lora_scale=0.7)
+            if a.verbose: print(' loaded LoRA', a.load_lora)
+
+        if isset(a, 'animdiff'): # after lora !
+            self.pipe.register_modules(motion_adapter = motion_adapter)
 
         # load ip adapter = after animatediff
         if isset(a, 'img_ref'):
@@ -180,7 +188,7 @@ class SDfu:
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
         if not os.path.exists(sched_path):
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
-        self.sched_kwargs = {"eta": a.ddim_eta} if a.sampler == 'ddim' else {}
+        self.sched_kwargs = {"eta": a.eta} if a.sampler.lower() in ['ddim','tcd'] else {}
         if a.sampler == 'lcm':
             from diffusers.schedulers import LCMScheduler
             scheduler = LCMScheduler.from_pretrained(os.path.join(a.maindir, 'lcm/scheduler/scheduler_config.json'))
@@ -202,6 +210,8 @@ class SDfu:
                 from diffusers.schedulers import UniPCMultistepScheduler as Sched
             elif a.sampler == 'lms':
                 from diffusers.schedulers import LMSDiscreteScheduler as Sched
+            elif a.sampler == 'tcd':
+                from diffusers.schedulers.scheduling_tcd import TCDScheduler as Sched
             else:
                 print(' Unknown sampler', a.sampler); exit()
             scheduler = Sched.from_pretrained(sched_path)
@@ -394,7 +404,7 @@ class SDfu:
                 img_conds = c_img.chunk(2)[1] if cfg_scale in [0,1] else c_img # only c if no scale, to keep correct shape
                 img_uncond = c_img.chunk(2)[0]
                 if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
-            if self.use_kdiff or self.use_lcm or isset(self, 'isxl'): # trailing (lcm) or k- schedulers require reset on every generation
+            if self.use_kdiff or self.use_lcm or self.a.sampler=='tcd': # trailing (lcm) or k- schedulers require reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
             sagkwargs = {}
 
@@ -470,7 +480,7 @@ class SDfu:
                         for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
                             conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
                             if c_img is not None: # ip adapter
-                                ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(2)])
+                                ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(bs)])
                                 if self.a.sag_scale > 0:
                                     imcc = img_conds if cfg_scale in [0,1] else img_uncond
                                     sagkwargs['added_cond_kwargs']['image_embeds'] = imcc[slids]

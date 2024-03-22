@@ -16,8 +16,8 @@ Current functions:
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
 * Smooth & stable video edit with [TokenFlow]
 * Text to video with **[AnimateDiff]** and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
+* **Ultra-fast generation with [TCD Scheduler] or [SDXL-Lightning]** model (combined with other features)
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
-* **Ultra-fast HD generation with [SDXL-Lightning]** model (combined with other features)
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
@@ -87,8 +87,12 @@ python src/latwalk.py -im _in/pix --cfg_scale 0 -f 1
 Interpolations can be made smoother (and faster) by adding `--latblend X` option ([latent blending] technique, X in range 0~1). 
 If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
 Models can be selected with `--model` option by either a shortcut (15, 15drm, 21, 21v, ..), a path on the [Hugging Face] website (e.g. `SG161222/Realistic_Vision_V2.0`, would be auto-downloaded for further use) or a local path to the downloaded file set (or `safetensors` file).  
-Coherence and details may be enhanced by [Self-Attention Guidance] with argument `--sag_scale X` (~1.5x slower, best with `ddpm` sampler). It works with per-frame generation and [AnimateDiff], but not for latent blending (yet).  
+Coherence in details may be enhanced by [Self-Attention Guidance] with argument `--sag_scale X` (~1.5x slower, best with `ddpm` sampler). It works with per-frame generation and [AnimateDiff], but not for latent blending (yet).  
 Check other options and their shortcuts by running these scripts with `--help` option.  
+
+One of the most impressive recent advances is **ultrafast** Consistency generation approach (used in [LCM], [TCD Scheduler] and [SDXL-Lightning] techniques). It replaces regular diffusion part by the more direct latent prediction with distilled model, and requires very few (4 or more) steps to run. 
+To use [TCD Scheduler] with any SD 1.5 base model, add `--sampler tcd --load_lora h1t/TCD-SD15-LoRA --cfg_scale 1 -s X` options where X is low (starting from 4). 
+The quality seems to be sensitive to the prompt elaboration.
 
 There are also few Windows bat-files, slightly simplifying and automating the commands. 
 
@@ -208,7 +212,7 @@ You can also run `python src/latwalk.py ...` with finetuned weights to make anim
 
 ## Special model: LCM
 
-One of the most impressive recent discoveries is a Latent Consistency Model ([LCM]) architecture. It replaces regular diffusion part by a more direct latent prediction with distilled model, and requires only 2~4 steps to run. Supported only for image generation (not for video!).  
+Ultrafast Latent Consistency Model ([LCM]) with only 2~4 steps to run; supported only for image generation (not for video!).  
 Examples of usage:
 ```
 python src/gen.py -m lcm -t "hello world"
@@ -226,9 +230,13 @@ Unsupported (yet): video generation, multi guidance, fine-tuning, weighted promp
 NB: The models (~8gb total) are auto-downloaded on the first use; you may download them yourself and set the path with `--models_dir ...` option.  
 As an example, interpolate with ControlNet and Latent Blending:
 ```
-python src/sdxl.py -v -t yourfile.txt -cnimg _in/something.jpg -cmod depth -cts 0.6 --size 1280-768 -fs 5 -lb 0.8
+python src/sdxl.py -v -t yourfile.txt -cnimg _in/something.jpg -cmod depth -cts 0.6 --size 1280-768 -fs 5 -lb 0.75
 ```
-There is also a fast distilled model **[SDXL-Lightning]**, generating images of the same quality with few steps. Use it with `--lighting -s X` option where X = 2, 4 or 8. 
+Methods for **ultrafast** generation with only few steps:
+* distilled model [SDXL-Lightning]. Use it with `--lightning -s X` option where X = 2, 4 or 8. 
+Pro: best quality; contra: requires special model.
+* [TCD Scheduler]. Use it with `--sampler TCD --load_lora h1t/TCD-SDXL-LoRA --cfg_scale 1 -s X` options where X is low (starting from 4). 
+Pro: applicable to any SDXL model; contra: quality may be worse (sensitive to the prompts).
 
 ## Special model: Kandinsky 2.2
 
@@ -267,4 +275,5 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [ComfyUI]: <https://github.com/comfyanonymous/ComfyUI>
 [IP adapter]: <https://huggingface.co/h94/IP-Adapter>
 [SDXL-Lightning]: <https://huggingface.co/ByteDance/SDXL-Lightning>
+[TCD Scheduler]: <https://mhh0318.github.io/tcd/>
 [Self-Attention Guidance]: <https://github.com/KU-CVLAB/Self-Attention-Guidance>

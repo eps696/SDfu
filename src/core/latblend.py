@@ -368,7 +368,7 @@ class LatentBlending():
         if np.sum(list_mixing_coeffs) > 0:
             assert len(lats_mixing) == self.steps
 
-        if self.sd.use_kdiff or self.isxl or self.sd.use_lcm: # trailing (lcm) or k- schedulers require reset on every generation
+        if self.sd.use_kdiff or self.isxl or self.sd.use_lcm or self.sd.a.sampler.lower()=='tcd': # tcd/lcm/k schedulers require reset on every generation
             self.set_steps(self.sd.a.steps, self.sd.a.strength)
 
         self.run_scope = nullcontext # torch.autocast
