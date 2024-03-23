@@ -6,7 +6,7 @@
 
 This is yet another Stable Diffusion toolkit, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) as convenient production suites, or [ComfyUI] for node-based workflows.  
 
-The toolkit is built on top of the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [k-diffusion](https://github.com/crowsonkb/k-diffusion), [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
+The toolkit is built on top of the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
 There was also a [similar repo](https://github.com/eps696/SD) (abandoned now), based on the [CompVis] and [Stability AI] libraries.  
 
 Current functions:

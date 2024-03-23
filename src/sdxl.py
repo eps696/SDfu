@@ -6,6 +6,7 @@ import numpy as np
 import imageio
 from contextlib import nullcontext
 from huggingface_hub import hf_hub_download
+import inspect
 
 import torch
 from safetensors.torch import load_file
@@ -65,7 +66,6 @@ class SDfu:
         self.setseed(a.seed if isset(a, 'seed') else None)
         if not isset(a, 'in_img'): a.strength = 1.
         a.unprompt = unprompt(a)
-        self.sched_kwargs = {}
         
         def get_model(name, url):
             return os.path.join(a.models_dir, name) if os.path.exists(os.path.join(a.models_dir, name)) else url
@@ -82,7 +82,6 @@ class SDfu:
         elif a.sampler.lower() == 'tcd':
             from diffusers.schedulers.scheduling_tcd import TCDScheduler
             self.pipe.scheduler = TCDScheduler.from_pretrained(get_model('base', base_url), subfolder='scheduler')
-            self.sched_kwargs = {"eta": a.eta}
             self.a.cfg_scale = 0
         self.pipe.to(device)
         self.unet           = self.pipe.unet
@@ -123,6 +122,10 @@ class SDfu:
                 
             self.pipe.register_modules(image_encoder = self.image_encoder)
             self.pipe.set_ip_adapter_scale(a.imgref_weight)
+
+        self.sched_kwargs = {'eta': a.eta} if "eta" in set(inspect.signature(self.scheduler.step).parameters.keys()) else {}
+        if "generator" in set(inspect.signature(self.scheduler.step).parameters.keys()):
+            self.sched_kwargs['generator'] = self.g_
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
         self.res = self.unet.config.sample_size * self.vae_scale # original model resolution

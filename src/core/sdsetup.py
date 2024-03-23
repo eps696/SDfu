@@ -4,6 +4,7 @@ import time
 import numpy as np
 from contextlib import nullcontext
 from einops import rearrange
+import inspect
 
 import torch
 import torch.nn.functional as F
@@ -133,8 +134,7 @@ class SDfu:
         self.tokenizer    = self.pipe.tokenizer
         self.unet         = self.pipe.unet
         self.vae          = self.pipe.vae
-        self.scheduler    = self.pipe.scheduler if self.a.sampler=='orig' else self.set_scheduler(self.a)
-        self.sched_kwargs = {}
+        self.scheduler    = self.pipe.scheduler if self.a.sampler=='orig' else self.set_scheduler(self.a, path=model_path)
 
     def load_model_custom(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # paths
@@ -181,14 +181,15 @@ class SDfu:
 
         self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
 
-    def set_scheduler(self, a, subdir='', vtype=False):
+    def set_scheduler(self, a, subdir='', vtype=False, path=None):
         if isset(a, 'animdiff'):
             sched_path = os.path.join(a.maindir, 'scheduler_config-linear.json')
         else:
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
         if not os.path.exists(sched_path):
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
-        self.sched_kwargs = {"eta": a.eta} if a.sampler.lower() in ['ddim','tcd'] else {}
+        if not os.path.exists(sched_path) and path is not None:
+            sched_path = os.path.join(path, 'scheduler/scheduler_config.json')
         if a.sampler == 'lcm':
             from diffusers.schedulers import LCMScheduler
             scheduler = LCMScheduler.from_pretrained(os.path.join(a.maindir, 'lcm/scheduler/scheduler_config.json'))
@@ -220,6 +221,10 @@ class SDfu:
     def final_setup(self, a):
         if isxf and not isset(a, 'img_ref'): self.pipe.enable_xformers_memory_efficient_attention() # !!! breaks ip adapter
         if isset(a, 'freeu'): self.pipe.unet.enable_freeu(s1=1.5, s2=1.6, b1=0.9, b2=0.2) # 2.1 1.4, 1.6, 0.9, 0.2, sdxl 1.3, 1.4, 0.9, 0.2
+
+        self.sched_kwargs = {'eta': a.eta} if "eta" in set(inspect.signature(self.scheduler.step).parameters.keys()) else {}
+        if "generator" in set(inspect.signature(self.scheduler.step).parameters.keys()):
+            self.sched_kwargs['generator'] = self.g_
 
         self.vae_scale = 2 ** (len(self.vae.config.block_out_channels) - 1) # 8
         self.res = self.unet.config.sample_size * self.vae_scale # original model resolution (not for video models!)
