@@ -4,7 +4,7 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/eps696/SDfu/blob/master/SDfu_colab.ipynb)
 
-This is yet another Stable Diffusion toolkit, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) as convenient production suites, or [ComfyUI] for node-based workflows.  
+This is yet another Stable Diffusion toolkit, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [Fooocus] as convenient production suites, or [ComfyUI] for flexible node-based workflows.  
 
 The toolkit is built on top of the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
 There was also a [similar repo](https://github.com/eps696/SD) (abandoned now), based on the [CompVis] and [Stability AI] libraries.  
@@ -14,9 +14,9 @@ Current functions:
 * Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
+* **Video generation** with [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
 * Smooth & stable video edit with [TokenFlow]
-* Text to video with **[AnimateDiff]** and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
-* **Ultra-fast generation with [TCD Scheduler] or [SDXL-Lightning]** model (combined with other features)
+* **Ultra-fast generation** with [TCD Scheduler] or [SDXL-Lightning] model (combined with other features)
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
 
 Fine-tuning with your images:
@@ -258,7 +258,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [CompVis]: <https://github.com/CompVis/stable-diffusion>
 [Stability AI]: <https://github.com/Stability-AI/stablediffusion>
 [InvokeAI]: <https://github.com/invoke-ai/InvokeAI>
-[Deforum]: <https://github.com/deforum-art/deforum-stable-diffusion>
+[Fooocus]: <https://github.com/lllyasviel/Fooocus>
 [CLIPseg]: <https://github.com/timojl/clipseg>
 [ControlNet]: <https://github.com/lllyasviel/ControlNet>
 [Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
