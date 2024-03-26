@@ -32,7 +32,7 @@ def get_args(parser):
     parser.add_argument('-mdir', '--models_dir', default='models/xl')
     # parser.add_argument('-m',  '--model',   default='base', help='base or refiner')
     parser.add_argument('-sm', '--sampler', default='euler')
-    parser.add_argument('-lg',  '--lightning', action='store_true', help='Use SDXL-Lightning Unet')
+    parser.add_argument('-ltg','--lightning', action='store_true', help='Use SDXL-Lightning Unet')
     parser.add_argument('-fs', '--fstep',   default=1, type=int, help="number of frames for each interpolation step (1 = no interpolation)")
     parser.add_argument('-lb', '--latblend', default=0, type=float, help="Strength of latent blending, if > 0: 0.1 ~ alpha-blend, 0.9 ~ full rebuild")
     parser.add_argument('-cts', '--control_scale', default=0.5, type=float, help="ControlNet effect scale")
