@@ -92,11 +92,11 @@ def main():
     if sd.use_cnet and isset(a, 'control_img'):
         assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
         if os.path.isdir(a.control_img):
-            cn_imgs = [imageio.imread(path) for path in img_list(a.control_img)][:a.frames]
+            cn_imgs = [load_img(path)[0] for path in img_list(a.control_img)][:a.frames]
             assert len(cn_imgs) == a.frames, "!! Not enough ControlNet images: %d, total frame count %d !!" % (len(cn_imgs), a.frames)
-        else: 
-            cn_imgs = [imageio.imread(a.control_img)] * a.frames
-        cn_imgs = torch.from_numpy(np.stack(cn_imgs)).cuda().half().permute(0,3,1,2) / 255. # [0..1] [f,c,h,w]
+        else:
+            cn_imgs = [load_img(a.control_img)[0]] * a.frames
+        cn_imgs = torch.cat(cn_imgs) / 2. + 0.5 # [0..1] [f,c,h,w]
         if list(cn_imgs.shape[-2:]) != [H, W]:
             cn_imgs = F.interpolate(cn_imgs, (H, W), mode='bicubic', align_corners=True)
         gendict['cnimg'] = cn_imgs
