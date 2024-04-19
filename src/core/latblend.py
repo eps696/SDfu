@@ -204,6 +204,7 @@ class LatentBlending():
         if self.cfg_scale == 0 and not self.isxl: # no guidance
             cond = None
             im_cond = None
+            pool_c = None
         else:
             if isset(self.sd.a, 'lguide') and self.sd.a.lguide is True and not self.isxl: # multi guidance
                 cond = [self.text_emb1, self.text_emb2, fract_mixing]

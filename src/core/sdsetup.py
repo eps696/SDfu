@@ -17,7 +17,7 @@ from diffusers.utils import is_accelerate_available, is_accelerate_version
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 
 from .text import multiprompt
-from .utils import img_list, load_img, makemask, isok, isset, progbar, file_list
+from .utils import file_list, img_list, load_img, makemask, isok, isset, progbar
 from .args import models, unprompt
 
 import logging
@@ -287,24 +287,22 @@ class SDfu:
     def img_cus(self, img_path, allref=False): # ucs and cs together
         assert os.path.exists(img_path), "!! Image ref %s not found !!" % img_path
         if allref is True: # all files at once
-            img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in [os.path.join(dp, f) for dp,dn,fn in os.walk(img_path) for f in fn]])]
+            img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in img_list(img_path, subdir=True)])]
         else:
             if os.path.isfile(img_path): # single image
-                img_conds = [self.img_cu(load_img(img_path, 224, tensor=False)[0])] # list 1 of [2,1,..]
-            else:
-                subdirs = sorted([f.path for f in os.scandir(img_path) if f.is_dir()])
-                if len(subdirs) > 0: # every subfolder at once
-                    img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in img_list(sub)]) for sub in subdirs] # list N of [2,1,..]
-                else: # every image separately
-                    img_conds = [self.img_cu(load_img(im, 224, tensor=False)[0]) for im in img_list(img_path)] # list N of [2,1,..]
-        return img_conds # list of [2,1,1024] base or [2,1,257,1280] face
+                img_conds = [self.img_cu(load_img(img_path, 224, tensor=False)[0])] # list 1 of [2,1,1024]
+            else: # every image/subfolder separately
+                subs = sorted(img_list(img_path) + [f.path for f in os.scandir(img_path) if f.is_dir()])
+                img_conds = [self.img_cu([load_img(im, 224,tensor=False)[0] for im in img_list(sub)] if os.path.isdir(sub) \
+                                     else load_img(sub,224,tensor=False)[0]) for sub in subs] # list N of [2,1,1024]
+        return img_conds # list of [2,1,1024]
 
     def img_cu(self, images): # uc and c together
         with self.run_scope('cuda'):
             images = self.image_preproc(images, return_tensors="pt").pixel_values.to(device) # [N,3,224,224]
             cs = self.image_encoder(images).image_embeds.mean(0, keepdim=True) # [1,1024]
             ucs = torch.zeros_like(cs)
-            return torch.stack([ucs, cs]) # [2,1,1024] base or [2,1,257,1280] face
+            return torch.stack([ucs, cs]) # [2,1,1024]
 
     def img_lat(self, image, deterministic=False):
         with self.run_scope('cuda'):

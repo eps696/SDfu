@@ -199,11 +199,14 @@ def file_list(path, ext=None):
         files = [f for f in files if f.endswith(ext)]
     return sorted([f for f in files if os.path.isfile(f)])
 
-def img_list(path):
-    files = [os.path.join(path, f) for f in os.listdir(path)]
+def img_list(path, subdir=None):
+    if subdir is True:
+        files = [os.path.join(dp, f) for dp, dn, fn in os.walk(path) for f in fn]
+    else:
+        files = [os.path.join(path, f) for f in os.listdir(path)]
     files = [f for f in files if os.path.splitext(f.lower())[1][1:] in ['jpg', 'jpeg', 'png', 'ppm', 'tif']]
+    files = [f for f in files if not '/__MACOSX/' in f.replace('\\', '/')] # workaround fix for macos phantom files
     return sorted([f for f in files if os.path.isfile(f)])
-
 
 def blend(t, ip):
     if ip == 'bezier':

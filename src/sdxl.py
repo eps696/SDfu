@@ -18,9 +18,6 @@ from core.args import main_args, unprompt
 from core.text import read_txt, txt_clean
 from core.utils import img_list, load_img, save_img, lerp, slerp, blend, basename, makemask, progbar, save_cfg, cvshow, calc_size, isok, isset
 
-try:
-    import xformers; isxf = True
-except: isxf = False
 try: # colab
     get_ipython().__class__.__name__
     iscolab = True
@@ -165,16 +162,14 @@ class SDfu:
     def img_cus(self, img_path, allref=False): # ucs and cs together
         assert os.path.exists(img_path), "!! Image ref %s not found !!" % img_path
         if allref is True: # all files at once
-            img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in [os.path.join(dp, f) for dp,dn,fn in os.walk(img_path) for f in fn]])]
+            img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in img_list(img_path, subdir=True)])]
         else:
             if os.path.isfile(img_path): # single image
                 img_conds = [self.img_cu(load_img(img_path, 224, tensor=False)[0])] # list 1 of [2,1,1024]
-            else:
-                subdirs = sorted([f.path for f in os.scandir(img_path) if f.is_dir()])
-                if len(subdirs) > 0: # every subfolder at once
-                    img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in img_list(sub)]) for sub in subdirs] # list N of [2,1,1024]
-                else: # every image separately
-                    img_conds = [self.img_cu(load_img(im, 224, tensor=False)[0]) for im in img_list(img_path)] # list N of [2,1,1024]
+            else: # every image/subfolder separately
+                subs = sorted(img_list(img_path) + [f.path for f in os.scandir(img_path) if f.is_dir()])
+                img_conds = [self.img_cu([load_img(im, 224,tensor=False)[0] for im in img_list(sub)] if os.path.isdir(sub) \
+                                     else load_img(sub,224,tensor=False)[0]) for sub in subs] # list N of [2,1,1024]
         return img_conds # list of [2,1,1024]
 
     def img_cu(self, images): # uc and c together
