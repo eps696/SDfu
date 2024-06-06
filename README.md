@@ -171,7 +171,6 @@ python src/vid.py -t "combat in the dancehall" --in_vid yourvideo.mp4 --model vz
 NB: this model is limited to rather mundane stuff, don't expect any notable level of abstraction or fantasy here.
 
 
-
 ## Fine-tuning
 
 * Train new token embedding for a specific subject (e.g. cat) with [textual inversion]:
@@ -237,6 +236,13 @@ Methods for **ultrafast** generation with only few steps:
 Pro: best quality; contra: requires special model.
 * [TCD Scheduler]. Use it with `--sampler TCD --load_lora h1t/TCD-SDXL-LoRA --cfg_scale 1 -s X` options where X is low (starting from 4). 
 Pro: applicable to any SDXL model; contra: quality may be worse (sensitive to the prompts).
+
+Generate a video with SDXL model and [AnimateDiff] motion adapter (beware: sensitive to complex prompts):
+```
+python src/sdxl.py -v -t "fiery dragon in a China shop" -ad guoyww/animatediff-motion-adapter-sdxl-beta -sm euler -s 23 --size 1024-576
+```
+Technically, AnimateDiff-XL supports fast [SDXL-Lightning] models and [TCD Scheduler], but the results are very poor. 
+
 
 ## Special model: Kandinsky 2.2
 
