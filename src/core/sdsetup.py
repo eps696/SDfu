@@ -176,16 +176,15 @@ class SDfu:
         self.vae = vae
 
         if scheduler is None:
-            scheduler = self.set_scheduler(a, self.subdir, vtype)
+            scheduler = self.set_scheduler(a, self.subdir)
         self.scheduler = scheduler
 
         self.pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
 
-    def set_scheduler(self, a, subdir='', vtype=False, path=None):
-        if isset(a, 'animdiff'):
-            sched_path = os.path.join(a.maindir, 'scheduler_config-linear.json')
-        else:
-            sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
+    def set_scheduler(self, a, subdir='', path=None):
+        sched_args = {}
+        if isset(a, 'animdiff'): sched_args = {'beta_schedule': "linear", 'timestep_spacing': "linspace", 'clip_sample': False, 'steps_offset':1, **sched_args} 
+        sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
         if not os.path.exists(sched_path):
             sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
         if not os.path.exists(sched_path) and path is not None:

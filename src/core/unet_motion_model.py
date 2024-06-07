@@ -37,16 +37,30 @@ def animdiff_forward(self, sample, timestep, encoder_hidden_states, timestep_con
     t_emb = t_emb.to(dtype=self.dtype)
 
     emb = self.time_embedding(t_emb, timestep_cond)
+
+# for sdxl animatediff
     emb = emb.repeat_interleave(repeats=num_frames, dim=0)
+    aug_emb = None
+    if self.config.addition_embed_type == "text_time":
+        text_embeds = added_cond_kwargs.get("text_embeds") # [2*f,1280]
+        time_ids = added_cond_kwargs.get("time_ids")
+        time_embeds = self.add_time_proj(time_ids.flatten())
+        time_embeds = time_embeds.reshape((text_embeds.shape[0], -1)) # [2*f,1536]
+        add_embeds = torch.concat([text_embeds, time_embeds], dim=-1)
+        add_embeds = add_embeds.to(emb.dtype)
+        aug_emb = self.add_embedding(add_embeds)
+    emb = emb if aug_emb is None else emb + aug_emb # [2*f,1280]
+    # emb = emb.repeat_interleave(repeats=num_frames, dim=0)
+
+# !!! conds are batched already as schedule
+    # print(' !!!', num_frames, encoder_hidden_states.shape, sample.shape) # 16 [32,77,768]/[32,77,2048]  [2,4,16,72,128]
+    # encoder_hidden_states = encoder_hidden_states.repeat_interleave(repeats=num_frames, dim=0)
 
     if self.encoder_hid_proj is not None and self.config.encoder_hid_dim_type == "ip_image_proj":
         image_embeds = added_cond_kwargs.get("image_embeds")
         image_embeds = self.encoder_hid_proj(image_embeds)
+        image_embeds = [image_embed.repeat_interleave(repeats=num_frames, dim=0) for image_embed in image_embeds]
         encoder_hidden_states = (encoder_hidden_states, image_embeds) # image_embeds = list
-
-# !!! conds are batched already as schedule
-    # print(' !!!', num_frames, encoder_hidden_states.shape, sample.shape) # 16 [32,77,768]  [2,4,16,72,128]
-    # encoder_hidden_states = encoder_hidden_states.repeat_interleave(repeats=num_frames, dim=0)
 
     sample = sample.permute(0, 2, 1, 3, 4).reshape((sample.shape[0] * num_frames, -1) + sample.shape[3:])
     sample = self.conv_in(sample)

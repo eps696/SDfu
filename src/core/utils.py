@@ -68,7 +68,7 @@ def framestack(ins, frames, curve='linear', loop=True, rejoin=False):
             outs.append(ins[i+1])
         outs = torch.stack(outs)
     if rejoin:
-        outs = rearrange(outs, 'n b l f -> (b n) l f')
+        outs = rearrange(outs, 'n b ... -> (b n) ...')
     return outs
 
 def calc_size(size, quant=8, pad=False):

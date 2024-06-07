@@ -47,7 +47,7 @@ pip install xformers
 NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
 
 Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff], [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [IP adapter] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [IP adapter] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
