@@ -134,7 +134,7 @@ class SDfu:
         self.tokenizer    = self.pipe.tokenizer
         self.unet         = self.pipe.unet
         self.vae          = self.pipe.vae
-        self.scheduler    = self.pipe.scheduler if self.a.sampler=='orig' else self.set_scheduler(self.a, path=model_path)
+        self.scheduler    = self.pipe.scheduler if self.a.sampler=='orig' else self.set_scheduler(self.a, path=os.path.join(model_path, 'scheduler'))
 
     def load_model_custom(self, a, vae=None, text_encoder=None, tokenizer=None, unet=None, scheduler=None):
         # paths
@@ -184,11 +184,12 @@ class SDfu:
     def set_scheduler(self, a, subdir='', path=None):
         sched_args = {}
         if isset(a, 'animdiff'): sched_args = {'beta_schedule': "linear", 'timestep_spacing': "linspace", 'clip_sample': False, 'steps_offset':1, **sched_args} 
-        sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
-        if not os.path.exists(sched_path):
-            sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
-        if not os.path.exists(sched_path) and path is not None:
-            sched_path = os.path.join(path, 'scheduler/scheduler_config.json')
+        if not isset(self, 'sched_path'):
+            self.sched_path = os.path.join(a.maindir, subdir, 'scheduler_config-%s.json' % a.model)
+            if not os.path.exists(self.sched_path):
+                self.sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
+            if not os.path.exists(self.sched_path) and path is not None:
+                self.sched_path = os.path.join(path, 'scheduler_config.json')
         if a.sampler == 'lcm':
             from diffusers.schedulers import LCMScheduler
             scheduler = LCMScheduler.from_pretrained(os.path.join(a.maindir, 'lcm/scheduler/scheduler_config.json'))
@@ -214,7 +215,7 @@ class SDfu:
                 from diffusers.schedulers.scheduling_tcd import TCDScheduler as Sched
             else:
                 print(' Unknown sampler', a.sampler); exit()
-            scheduler = Sched.from_pretrained(sched_path)
+            scheduler = Sched.from_pretrained(self.sched_path)
         return scheduler
 
     def final_setup(self, a):

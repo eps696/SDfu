@@ -26,6 +26,7 @@ def get_args(parser):
     parser.add_argument(       '--curve',   default='bezier', help="Interpolating curve: bezier, parametric, custom or linear")
     parser.add_argument(       '--loop',    action='store_true')
     # override
+    parser.add_argument('-sm', '--sampler', default='euler', choices=samplers)
     parser.add_argument('-b',  '--batch',   default=1, type=int, choices=[1])
     parser.add_argument('-s',  '--steps',   default=23, type=int, help="number of diffusion steps")
     parser.add_argument('-cg', '--cguide',  default=False)
