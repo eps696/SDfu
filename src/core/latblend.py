@@ -81,7 +81,7 @@ class LatentBlending():
 
         self.dt_per_diff = 0
         self.lpips = lpips.LPIPS(net='alex', verbose=False).cuda()
-        self.slerp = slerp2 if self.sd.a.sampler == 'euler' or self.isxl else slerp
+        self.slerp = slerp2 if self.sd.use_kdiff or self.isxl else slerp
 
     def set_steps(self, steps, strength):
         self.steps = min(int(steps * strength), steps)
@@ -203,7 +203,6 @@ class LatentBlending():
         """
         if self.cfg_scale == 0 and not self.isxl: # no guidance
             cond = None
-            im_cond = None
             pool_c = None
         else:
             if isset(self.sd.a, 'lguide') and self.sd.a.lguide is True and not self.isxl: # multi guidance
@@ -211,10 +210,10 @@ class LatentBlending():
             else: # cond lerp
                 cond = lerp(self.text_emb1, self.text_emb2, fract_mixing)
                 pool_c = lerp(self.pool_emb1, self.pool_emb2, fract_mixing) if self.isxl else None
-            if self.img_emb1 is not None:
-                im_cond = [lerp(self.img_emb1[i], self.img_emb2[i], fract_mixing) for i in range(len(self.img_emb1))]
-            else:
-                im_cond = None
+        if self.img_emb1 is not None:
+            im_cond = [lerp(self.img_emb1[i], self.img_emb2[i], fract_mixing) for i in range(len(self.img_emb1))]
+        else:
+            im_cond = None
 
         fract_mixing_parental = (fract_mixing - self.tree_fracts[b_parent1]) / (self.tree_fracts[b_parent2] - self.tree_fracts[b_parent1])
 
@@ -391,14 +390,24 @@ class LatentBlending():
                 if self.isxl:
                     lat = self.xl_step(lat, cond, pool_c, im_cond, self.sd.timesteps[i])
                 else:
-                    lat = self.ddim_step(lat, cond, im_cond, self.sd.timesteps[i])
+                    lat = self.sd_step(lat, cond, im_cond, self.sd.timesteps[i])
 
                 lats_out.append(lat.clone())
 
             return lats_out
 
-    def ddim_step(self, lat, cond, im_cond, t, verbose=True):
+    def sd_step(self, lat, cond, im_cond, t, verbose=True):
         with self.run_scope("cuda"):
+            ukwargs = {}
+            if im_cond is not None: # encoded img for ip adapter
+                ukwargs['added_cond_kwargs'] = {"image_embeds": im_cond}
+            if self.sd.use_cnet and self.cnimg is not None: # controlnet
+                ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cnimg, 1, return_dict=False)
+                ctl_downs = [ctl_down * self.sd.a.control_scale for ctl_down in ctl_downs]
+                ctl_mid *= self.sd.a.control_scale
+                ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid, **ukwargs}
+
+            lat_in = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers
             if self.cfg_scale > 0:
                 if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
                     cond, cond2, mix = cond
@@ -408,24 +417,14 @@ class LatentBlending():
                     mix = 0.
                     bs = len(cond) + 1
                     cond_in = torch.cat([self.uc, cond])
-                lat_in = torch.cat([self.sd.scheduler.scale_model_input(lat.cuda(), t)] * bs) # scaling only k-samplers
-
-                ukwargs = {}
-                if self.sd.use_cnet and self.cnimg is not None: # controlnet
-                    ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cnimg, 1, return_dict=False)
-                    ctl_downs = [ctl_down * self.sd.a.control_scale for ctl_down in ctl_downs]
-                    ctl_mid *= self.sd.a.control_scale
-                    ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
-                if im_cond is not None: # encoded img for ip adapter
-                    ukwargs['added_cond_kwargs'] = {"image_embeds": im_cond}
-
+                lat_in = torch.cat([lat_in] * bs)
                 noises = self.sd.unet(lat_in, t, cond_in, **ukwargs).sample.chunk(bs) # pred noise residual at step t
                 noise_pred = noises[0] # uncond
                 for n in range(len(cond)): # multi guidance
                     noise_guide = noises[n+1] * (1.-mix) + noises[n+1+len(cond)] * mix - noises[0] if mix > 0 else noises[n+1] - noises[0]
                     noise_pred = noise_pred + noise_guide * self.cfg_scale * self.cws[n % len(self.cws)]
-            else: # no guidance, no controlnet
-                noise_pred = self.sd.unet(lat, t, self.uc).sample
+            else: # no guidance
+                noise_pred = self.sd.unet(lat_in, t, self.uc, **ukwargs).sample
             lat = self.sd.scheduler.step(noise_pred, t, lat, **self.sd.sched_kwargs).prev_sample
         return lat
 

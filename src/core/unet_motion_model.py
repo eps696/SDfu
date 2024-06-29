@@ -41,7 +41,7 @@ def animdiff_forward(self, sample, timestep, encoder_hidden_states, timestep_con
 # for sdxl animatediff
     emb = emb.repeat_interleave(repeats=num_frames, dim=0)
     aug_emb = None
-    if self.config.addition_embed_type == "text_time":
+    if hasattr(self.config, 'addition_embed_type') and self.config.addition_embed_type == "text_time":
         text_embeds = added_cond_kwargs.get("text_embeds") # [2*f,1280]
         time_ids = added_cond_kwargs.get("time_ids")
         time_embeds = self.add_time_proj(time_ids.flatten())

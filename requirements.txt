@@ -12,7 +12,7 @@ easydict
 numpy==1.23
 tqdm
 einops
-opencv-python
+opencv-python==4.8.0.76
 timm
 scikit-image
 jsonmerge

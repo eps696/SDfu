@@ -311,8 +311,11 @@ class SDfu:
             lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
 
-    def ddim_inv(self, lat, cond, cnimg=None): # ddim inversion, slower, ~exact
+    def ddim_inv(self, lat, cond, cnimg=None, c_img=None): # ddim inversion, slower, ~exact
         ukwargs = {}
+        if c_img is not None: # ip adapter
+            img_conds = c_img[-1:] if self.a.cfg_scale in [0,1] else c_img
+            ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
         with self.run_scope('cuda'):
             for t in reversed(self.scheduler.timesteps):
                 with torch.no_grad():

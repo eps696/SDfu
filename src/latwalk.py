@@ -82,6 +82,10 @@ def main():
         images = sd.generate(z_, cs, uc, cws=cws, verbose=verbose, c_img=c_img, **gendict)
         return images
 
+    if sd.use_cnet and isset(a, 'control_img'):
+        assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
+        cdict['cnimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
+
     if isset(a, 'in_lats') and os.path.exists(a.in_lats): # load saved latents & conds
         zs, csb, cwb, uc = read_latents(a.in_lats) # [num,1,4,h,w], [num,b,77,768], [num,b], [1,77,768]
         if os.path.isfile(a.in_lats.replace('.pkl', '-ic.pkl')): # ip adapter img conds
@@ -114,10 +118,12 @@ def main():
                 zs  = []
                 pbar = progbar(count)
                 for i in range(count):
-                    zs += [sd.ddim_inv(sd.img_lat(load_img(img_paths[i], size)[0]), uc)] # ddim inversion
+                    if len(img_conds) > 0: cdict['c_img'] = img_conds[i % len(img_conds)]
+                    zs += [sd.ddim_inv(sd.img_lat(load_img(img_paths[i], size)[0]), uc, **cdict)] # ddim inversion
                     if i==0:
                         W, H = size = [sh * sd.vae_scale for sh in zs[-1].shape[-2:]][::-1] # set size as of the first image
                     pbar.upd()
+                if len(img_conds) > 0: cdict['c_img'] = img_conds # restore all
 
             elif os.path.isfile(a.in_img): # single image + text interpolation
                 init_image, (W,H) = load_img(a.in_img, size)
@@ -133,10 +139,6 @@ def main():
         else: # only text interpolation
             W, H = [sd.res]*2 if size is None else size
             zs = [sd.rnd_z(H, W) for i in range(count)]
-
-    if sd.use_cnet and isset(a, 'control_img'):
-        assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
-        cdict['cnimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
 
     # save key latents if needed
     if isinstance(zs, list): zs = torch.stack(zs)
@@ -190,8 +192,7 @@ def main():
             img_count = pcount * a.fstep
 
     if a.loop is not True:
-        if len(img_conds) > 0:
-            cdict['c_img'] = [ img_conds[(pcount) % len(img_conds)], img_conds[0] ]
+        if len(img_conds) > 0: cdict['c_img'] = img_conds # restore all
         images = genmix(zs, csb, cwb, uc, pcount, **cdict, **gendict)
         save_img(images[0], img_count, a.out_dir)
 
