@@ -67,10 +67,6 @@ class SDfu:
 
         # load finetuned stuff
         mod_tokens = None
-        # if isset(a, 'load_lora') and os.path.isfile(a.load_lora): # lora
-            # self.pipe.load_lora_weights(a.load_lora, low_cpu_mem_usage=True)
-            # self.pipe.fuse_lora()
-            # if a.verbose: print(' loaded LoRA', a.load_lora)
         if isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
             from .finetune import load_delta, custom_diff
             self.pipe.unet = custom_diff(self.pipe.unet, train=False)
@@ -82,17 +78,6 @@ class SDfu:
             for emb_file in emb_files:
                 mod_tokens += load_embeds(torch.load(emb_file), self.pipe.text_encoder, self.pipe.tokenizer)
         if mod_tokens is not None: print(' loaded tokens:', mod_tokens[0] if len(mod_tokens)==1 else mod_tokens)
-
-        # load controlnet
-        if isset(a, 'control_mod'):
-            if not os.path.exists(a.control_mod): a.control_mod = os.path.join(a.maindir, 'control', a.control_mod)
-            assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
-            if a.verbose: print(' loading ControlNet', a.control_mod)
-            from diffusers import ControlNetModel
-            self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
-            if not self.a.lowmem: self.cnet.to(device)
-            self.pipe.register_modules(controlnet=self.cnet)
-        self.use_cnet = hasattr(self, 'cnet')
 
         # load animatediff = before ip adapter, after custom diffusion !
         if isset(a, 'animdiff'):
@@ -124,6 +109,17 @@ class SDfu:
             self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.maindir, 'image/ip-adapter_sd15.bin'), map_location="cpu"))
             self.pipe.register_modules(image_encoder = self.image_encoder)
             self.pipe.set_ip_adapter_scale(a.imgref_weight)
+
+        # load controlnet = after lora
+        if isset(a, 'control_mod'):
+            if not os.path.exists(a.control_mod): a.control_mod = os.path.join(a.maindir, 'control', a.control_mod)
+            assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
+            if a.verbose: print(' loading ControlNet', a.control_mod)
+            from diffusers import ControlNetModel
+            self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
+            if not self.a.lowmem: self.cnet.to(device)
+            self.pipe.register_modules(controlnet=self.cnet)
+        self.use_cnet = hasattr(self, 'cnet')
 
         self.final_setup(a)
 
