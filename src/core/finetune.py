@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
+import xformers
 from diffusers.models.attention_processor import Attention
 
 PIL_INTERPOLATION = PIL.Image.Resampling.BICUBIC if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0") else PIL.Image.BICUBIC
