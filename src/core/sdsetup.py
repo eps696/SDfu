@@ -21,7 +21,9 @@ from .utils import file_list, img_list, load_img, makemask, isok, isset, progbar
 from .args import models, unprompt
 
 import logging
+logging.getLogger('pytorch').setLevel(logging.ERROR)
 logging.getLogger('diffusers').setLevel(logging.ERROR)
+logging.getLogger('diffusers.models.modeling_utils').setLevel(logging.CRITICAL)
 try:
     import xformers; isxf = True
 except: isxf = False
