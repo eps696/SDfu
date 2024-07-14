@@ -1,4 +1,10 @@
 
+import logging
+logging.getLogger('xformers').setLevel(logging.ERROR)
+logging.getLogger('diffusers.models.modeling_utils').setLevel(logging.CRITICAL)
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
+
 import os, sys
 import time
 import numpy as np
@@ -13,6 +19,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers.models import AutoencoderKL
 from diffusers import StableDiffusionPipeline
 from diffusers.utils import is_accelerate_available, is_accelerate_version
+logging.getLogger('diffusers').setLevel(logging.ERROR)
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 
@@ -20,10 +27,6 @@ from .text import multiprompt
 from .utils import file_list, img_list, load_img, makemask, isok, isset, progbar
 from .args import models, unprompt
 
-import logging
-logging.getLogger('pytorch').setLevel(logging.ERROR)
-logging.getLogger('diffusers').setLevel(logging.ERROR)
-logging.getLogger('diffusers.models.modeling_utils').setLevel(logging.CRITICAL)
 try:
     import xformers; isxf = True
 except: isxf = False
