@@ -40,8 +40,8 @@ def main():
 
     get_model("https://www.dropbox.com/s/38876tjuklvwq82/sdfu-v21-full-fp16.zip?dl=1", 'models/v2', \
               'unet21/diffusion_pytorch_model.bin', 'complete SD 2.1 model')
-    get_model("https://www.dropbox.com/s/10gbecrugca1ydv/sdfu-v21v-full-fp16.zip?dl=1", 'models/v2v', \
-              'unet21v/diffusion_pytorch_model.bin', 'complete SD 2.1-v model')
+    # get_model("https://www.dropbox.com/s/10gbecrugca1ydv/sdfu-v21v-full-fp16.zip?dl=1", 'models/v2v', \
+              # 'unet21v/diffusion_pytorch_model.bin', 'complete SD 2.1-v model')
     get_model("https://www.dropbox.com/s/r5fa1mdxpw9e8k2/sdfu-v2i-unet-fp16.zip?dl=1", 'models/v2', \
               'unet2i/diffusion_pytorch_model.bin', 'SD 2-inpainting model Unet')
     # get_model("https://www.dropbox.com/s/4visx4qcscirvob/sdfu-v2d-unet-fp16.zip?dl=1", 'models/v2', \
@@ -62,8 +62,8 @@ def main():
     get_model("https://www.dropbox.com/s/qhe1zpbubjr3t75/sdfu-controlnet.zip?dl=1", 'models', \
               'control/depth/diffusion_pytorch_model.bin', 'ControlNet models')
 
-    get_model("https://www.dropbox.com/s/n1z21ds5eauzk4m/sdfu-ip2p-unet-fp16.zip?dl=1", 'models/v1', \
-              'unet1p2p/diffusion_pytorch_model.bin', 'Instruct pix2pix Unet')
+    # get_model("https://www.dropbox.com/s/n1z21ds5eauzk4m/sdfu-ip2p-unet-fp16.zip?dl=1", 'models/v1', \
+              # 'unet1p2p/diffusion_pytorch_model.bin', 'Instruct pix2pix Unet')
 
     get_model("https://www.dropbox.com/s/z9uycihl6tybx9y/sdfu-v1-vaes-fp16.zip?dl=1", 'models/v1', \
               'vae-ft-ema/diffusion_pytorch_model.bin', 'SD 1.x extra VAE models')

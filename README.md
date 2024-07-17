@@ -7,13 +7,12 @@
 This is yet another Stable Diffusion toolkit, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [Fooocus] as convenient production suites, or [ComfyUI] for flexible node-based workflows.  
 
 The toolkit is built on top of the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
-There was also a [similar repo](https://github.com/eps696/SD) (abandoned now), based on the [CompVis] and [Stability AI] libraries.  
 
 Current functions:
 * Text to image, with possible prompting **by reference images** via [IP adapter]
 * Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
-* Guidance with [ControlNet] (pose, depth, canny edges) and [Instruct pix2pix]
+* Guidance with [ControlNet] (pose, depth, canny edges)
 * **Video generation** with [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
 * Smooth & stable video edit with [TokenFlow]
 * **Ultra-fast generation** with [TCD Scheduler] or [SDXL-Lightning] model (combined with other features)
@@ -47,7 +46,7 @@ pip install xformers
 NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
 
 Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[2.1](https://huggingface.co/stabilityai/stable-diffusion-2-1-base), [2.1-v](https://huggingface.co/stabilityai/stable-diffusion-2-1), [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [instruct-pix2pix](https://huggingface.co/timbrooks/instruct-pix2pix), [IP adapter] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+[custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [IP adapter] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
@@ -86,7 +85,7 @@ python src/latwalk.py -im _in/pix --cfg_scale 0 -f 1
 ```
 Interpolations can be made smoother (and faster) by adding `--latblend X` option ([latent blending] technique, X in range 0~1). 
 If needed, smooth the result further with [FILM](https://github.com/google-research/frame-interpolation).  
-Models can be selected with `--model` option by either a shortcut (15, 15drm, 21, 21v, ..), a path on the [Hugging Face] website (e.g. `SG161222/Realistic_Vision_V2.0`, would be auto-downloaded for further use) or a local path to the downloaded file set (or `safetensors` file).  
+Models can be selected with `--model` option by either a shortcut (15, 15drm, 21, ..), a path on the [Hugging Face] website (e.g. `SG161222/Realistic_Vision_V2.0`, would be auto-downloaded for further use) or a local path to the downloaded file set (or `safetensors` file).  
 Coherence in details may be enhanced by [Self-Attention Guidance] with argument `--sag_scale X` (~1.5x slower, best with `ddpm` sampler). It works with per-frame generation and [AnimateDiff], but not for latent blending (yet).  
 Check other options and their shortcuts by running these scripts with `--help` option.  
 
@@ -108,7 +107,7 @@ python src/latwalk.py --img_ref _in/pix --latblend 0.8 --size 1024-576
 ```
 
 
-## Guide synthesis with [ControlNet] or [Instruct pix2pix]
+## Guide synthesis with [ControlNet]
 
 * Generate an image from existing one, using its depth map as conditioning (extra guiding source):
 ```
@@ -130,14 +129,8 @@ also with pan/zoom recursion:
 python src/recur.py -cmod canny -cnimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02 -m 15drm
 ```
 
-### More ways to edit images 
+### Video editing with [TokenFlow]
 
-[Instruct pix2pix]:
-```
-python src/gen.py -im _in/pix --img_scale 2 -C 9 -t "turn human to puppet" --model 1p2p
-```
-
-[TokenFlow] (temporally stable!):
 ```
 python src/tokenflow.py -im _in/yoursequence -t "rusty metallic sculpture" --batch_size 4 --batch_pivot --cpu
 ```
@@ -267,7 +260,6 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [Fooocus]: <https://github.com/lllyasviel/Fooocus>
 [CLIPseg]: <https://github.com/timojl/clipseg>
 [ControlNet]: <https://github.com/lllyasviel/ControlNet>
-[Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
 [TokenFlow]: <https://github.com/omerbt/TokenFlow>
 [textual inversion]: <https://textual-inversion.github.io>
 [custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
@@ -277,9 +269,10 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [Kandinsky]: <https://huggingface.co/kandinsky-community>
 [AnimateDiff]: <https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2>
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>
-[Potat]: <https://huggingface.co/camenduru/potat1>
 [ComfyUI]: <https://github.com/comfyanonymous/ComfyUI>
 [IP adapter]: <https://huggingface.co/h94/IP-Adapter>
 [SDXL-Lightning]: <https://huggingface.co/ByteDance/SDXL-Lightning>
 [TCD Scheduler]: <https://mhh0318.github.io/tcd/>
 [Self-Attention Guidance]: <https://github.com/KU-CVLAB/Self-Attention-Guidance>
+[Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
+[instruct-pix2pix]: <https://huggingface.co/timbrooks/instruct-pix2pix>
