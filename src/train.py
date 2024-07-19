@@ -13,6 +13,8 @@ import itertools
 import logging
 logging.getLogger('xformers').setLevel(logging.ERROR)
 logging.getLogger('diffusers.models.modeling_utils').setLevel(logging.CRITICAL)
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
 import torch
 import torch.nn.functional as F

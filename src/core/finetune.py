@@ -38,30 +38,98 @@ templates_style = [
     "nice picture in the style of {}",
 ]
 
+# = = = by ConceptLab = = =
+
+PREFIXES = ['a', 'the', 'my']
+
+object_templates_standard = [
+    "Professional high-quality photo of {a} {token}. photorealistic, 4k, HQ",
+    "A photo of {a} {token}",
+    "A photo of {a} {token}. photorealistic, 4k, HQ",
+]
+object_templates_edits = [
+    "Professional high-quality art of {a} {token}. photorealistic",
+    "A painting of {a} {token}",
+    "A watercolor painting of {a} {token}",
+    "A painting of {a} {token} in the style of monet",
+    "Colorful graffiti of {a} {token}. photorealistic, 4k, HQ",
+    "A line drawing of {a} {token}",
+    "Oil painting of {a} {token}",
+    "Professional high-quality art of {a} {token} in the style of a cartoon",
+    "A close-up photo of {a} {token}",
+]
+import math
+object_templates = object_templates_standard * math.ceil(len(object_templates_edits) / len(object_templates_standard)) + object_templates_edits
+
+style_templates = [
+    "a painting in the style of {token}",
+    "a painting of a dog in the style of {token}",
+    "a painting of a cat in the style of {token}",
+    "a painting portrait in the style of {token}",
+    "a painting of a vase with flowers in the style of {token}",
+    "a painting of a valley in the style of {token}",
+    "a painting of a fruit bowl in the style of {token}",
+    "A painting of a bicycle in the style of {token}",
+    "A painting of a pair of shoes  in the style of {token}",
+    "A painting portrait of a musician playing a musical instrument in the style of {token}",
+    "A painting of a cup of coffee with steam in the style of {token}",
+    "A painting close-up painting of a seashell with delicate textures in the style of {token}",
+    "A painting of a vintage camera in the style of {token}",
+    "A painting of a bouquet of wildflowers in the style of {token}",
+    "A painting table set with fine china and silverware in the style of {token}",
+    "A painting of a bookshelf filled with books in the style of {token}",
+    "A painting close-up painting of a glass jar filled with marbles in the style of {token}",
+    "A painting portrait of a dancer captured in mid-motion in the style of {token}",
+    "A painting of a collection of antique keys with intricate designs in the style of {token}",
+    "A painting of a pair of sunglasses reflecting a scenic landscape in the style of {token}",
+]
+
 class Capturer():
-    def __init__(self):
+    def __init__(self, model='base'):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = torch.float16 if self.device == 'cuda' else torch.float32
         self.max_len = 32
 
-        from transformers import AutoProcessor, BlipForConditionalGeneration # , Blip2ForConditionalGeneration
         CAPTION_MODELS = {
-            'blip-base': 'Salesforce/blip-image-captioning-base',   # 990MB
-            'blip-large': 'Salesforce/blip-image-captioning-large', # 1.9GB
+            'base': 'Salesforce/blip-image-captioning-base',   # 990MB
+            'large': 'Salesforce/blip-image-captioning-large', # 1.9GB
             # 'blip2-2.7b': 'Salesforce/blip2-opt-2.7b',              # 15.5GB
-            # 'blip2-flan-t5-xl': 'Salesforce/blip2-flan-t5-xl',      # 15.77GB
+            't5xl': 'Salesforce/blip2-flan-t5-xl',      # 15.77GB
         }
-        model_path = CAPTION_MODELS['blip-base'] # 'blip-large' is too imaginative
-        model = BlipForConditionalGeneration.from_pretrained(model_path, torch_dtype=self.dtype) # Blip2ForConditionalGeneration
-        self.processor = AutoProcessor.from_pretrained(model_path, do_rescale=False)
+        model_path = CAPTION_MODELS[model]
+        if model.lower() in ['t5xl']:
+            from transformers import Blip2Processor, Blip2ForConditionalGeneration
+            model = Blip2ForConditionalGeneration.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16)
+            self.processor = Blip2Processor.from_pretrained(model_path)
+        else:
+            from transformers import AutoProcessor, BlipForConditionalGeneration
+            model = BlipForConditionalGeneration.from_pretrained(model_path, torch_dtype=self.dtype)
+            self.processor = AutoProcessor.from_pretrained(model_path, do_rescale=False)
         self.model = model.eval().to(self.device)
 
     def __call__(self, image):
         if torch.is_tensor(image): image = (image + 1.) / 2.
-        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
-        inputs = inputs.to(self.dtype)
+        inputs = self.processor(images=image, return_tensors="pt").to(self.device, dtype=self.dtype)
         tokens = self.model.generate(**inputs, max_new_tokens=self.max_len)
         return self.processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
+
+class ConceptDataset(Dataset):
+    def __init__(self, token, type):
+        self.token = token
+        self.templates = style_templates if type == 'style' else object_templates
+
+    def __len__(self):
+        return 5  # Doesn't really matter as we use steps
+
+    def __getitem__(self, i: int):
+        example = {}
+        template = random.choice(self.templates)
+        if '{a}' in template:
+            template = template.format(a=random.choice(PREFIXES), token='{token}')
+        text = template.format(token = self.token)
+        example["template"] = template
+        example["text"] = text
+        return example
 
 class FinetuneDataset(Dataset):
     def __init__(self, inputs, tokenizer, size=512, style=False, aug_img=True, aug_txt=True, add_caption=False, flip=True):

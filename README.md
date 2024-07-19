@@ -20,6 +20,7 @@ Current functions:
 
 Fine-tuning with your images:
 * Add subject (new token) with [textual inversion]
+	* Same with **inventing novel imagery** with [ConceptLab]
 * Add subject (new token + Unet delta) with [custom diffusion]
 * Add subject (Unet low rank delta) with [LoRA]
 
@@ -185,6 +186,12 @@ Custom diffusion trains faster and can achieve impressive reproduction quality (
 LoRA finetuning seems less precise while may affect wider spectrum of topics, and is a de-facto industry standard now.  
 Textual inversion is more generic but stable. Also, its embeddings can be easily combined together on load.  
 
+One can also train new token embedding for a novel unusual subject within a class, employing the trick from [ConceptLab] (see their webpage for details):
+```
+python src/trainew.py --token mypet --term pet
+```
+
+
 * Generate an image with trained weights from [LoRA]:
 ```
 python src/gen.py -t "cosmic beast cat" --load_lora mycat1-lora.pt
@@ -274,5 +281,6 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [SDXL-Lightning]: <https://huggingface.co/ByteDance/SDXL-Lightning>
 [TCD Scheduler]: <https://mhh0318.github.io/tcd/>
 [Self-Attention Guidance]: <https://github.com/KU-CVLAB/Self-Attention-Guidance>
+[ConceptLab]: <https://kfirgoldberg.github.io/ConceptLab>
 [Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
 [instruct-pix2pix]: <https://huggingface.co/timbrooks/instruct-pix2pix>
