@@ -38,7 +38,7 @@ parser.add_argument('--term',           default=None, help="generic word(s), ass
 parser.add_argument('--data',           default=None, help="folder containing target images")
 parser.add_argument('--term_data',      default=None, help="folder containing generic class images (priors for new token)")
 parser.add_argument('-st', '--style',   action='store_true', help="Train for a visual style (otherwise for objects)")
-parser.add_argument('-m',  '--model',   default='15')
+parser.add_argument('-m',  '--model',   default='15drm')
 parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
 parser.add_argument('-rd', '--load_custom', default=None, help="path to the custom diffusion delta checkpoint to resume from")
 parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file to resume from")
@@ -89,7 +89,7 @@ def main():
         scheduler    = pipe.scheduler
     else:
         # paths
-        subdir = 'v2v' if a.model=='21v' else 'v2' if a.model[0]=='2' else 'v1'
+        subdir = 'v2' if a.model[0]=='2' else 'v1'
         txtenc_path = os.path.join(a.maindir, subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text')
         sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
         unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
