@@ -19,14 +19,18 @@ def main_args():
     parser.add_argument('-pre', '--pretxt', default='', help='Prefix for input text')
     parser.add_argument('-post','--postxt', default='', help='Postfix for input text')
     parser.add_argument('-im', '--in_img',  default=None, help='input image or directory with images (overrides width and height)')
-    parser.add_argument('-imr','--img_ref', default=None, help='Reference image or directory with images (overrides width and height)')
-    parser.add_argument('-imw', '--imgref_weight', default=0.3, type=float, help='Weight for the reference image(s), relative to the text prompt')
     parser.add_argument('-M',  '--mask',    default=None, help='Path to input mask for inpainting mode (overrides width and height)')
     parser.add_argument('-un','--unprompt', default=None, help='Negative prompt to be used as a neutral [uncond] starting point')
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
     parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
+    # ip adapters
+    parser.add_argument('-imr','--img_ref', default=None, help='Reference image or directory with images (overrides width and height)')
+    parser.add_argument('-imw', '--imgref_weight', default='0.3', help='Weight[s] for the reference image(s), relative to the text prompt')
+    parser.add_argument('-ip', '--ipa',     default='', help='IP adapter model name')
+    parser.add_argument('-ipt','--ip_type', default='full', help='IP adapter type = full, scen, style, face')
+    parser.add_argument('-ar',  '--allref', default='', help='y = apply all reference images at once, n = pick one by one')
     # mandatory params
-    parser.add_argument('-m',  '--model',   default='15', help="SD model to use")
+    parser.add_argument('-m',  '--model',   default='15drm', help="SD model to use")
     parser.add_argument('-sm', '--sampler', default='ddim', choices=samplers)
     parser.add_argument(       '--vae',     default='ema', help='orig, ema, mse')
     parser.add_argument('-C','--cfg_scale', default=7.5, type=float, help="prompt guidance scale")
@@ -53,7 +57,6 @@ def main_args():
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
     parser.add_argument('-lo', '--lowmem',  action='store_true', help='Offload subnets onto CPU for higher resolution [slower]')
     parser.add_argument('-inv', '--invert_mask', action='store_true')
-    parser.add_argument('-ar',  '--allref',   action='store_true', help='Apply all reference images at once or pick one by one?')
     parser.add_argument('-v',  '--verbose', action='store_true')
 
     return parser

@@ -59,10 +59,14 @@ def main():
 
     img_conds = []
     if isset(a, 'img_ref'):
-        img_conds = sd.img_cus(a.img_ref, isset(a, 'allref')) # list of [2,1,1024]
-        count = max(count, len(img_conds))
-    if len(img_conds) > 0 and len(csb) != len(img_conds): print('!! %d text prompts != %d img refs !!' % (len(csb), len(img_conds)))
+        imrefs, iptypes, allrefs = a.img_ref.split('+'), a.ip_type.split('+'), a.allref.split('+')
+        refcount = max([len(imrefs), len(iptypes), len(allrefs)])
+        for i in range(refcount):
+            img_conds += [sd.img_cus(imrefs[i % len(imrefs)], sd.ips.index(iptypes[i % len(iptypes)]), allref = 'y' in allrefs[i % len(allrefs)].lower())]
+            count = max(count, len(img_conds[-1]))
 
+    if isset(a, 'in_img') and os.path.isdir(a.in_img) and not isset(a, 'in_vid'):
+        a.in_vid = a.in_img # probably confused invid and inimg
     if isset(a, 'in_vid'):
         assert os.path.exists(a.in_vid), "Not found %s" % a.in_vid
         if os.path.isdir(a.in_vid):
@@ -88,7 +92,7 @@ def main():
     cs_frames = framestack(cs, a.frames, a.curve, a.loop) # [f,77,768]
     uc_frames = uc.repeat(a.frames,1,1)
     if len(img_conds) > 0:
-        gendict['c_img'] = framestack(img_conds, a.frames, a.curve, a.loop, rejoin=True)
+        gendict['c_img'] = [framestack(img_cond, a.frames, a.curve, a.loop, rejoin=True) for img_cond in img_conds]
 
     if sd.use_cnet and isset(a, 'control_img'):
         assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img

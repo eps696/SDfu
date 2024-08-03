@@ -76,15 +76,11 @@ def main():
 
     def genmix(zs, csb, cwb, uc, i, tt=0, c_img=None, verbose=True, **gendict):
         if c_img is not None:
-            c_img = lerp(c_img[i % len(c_img)], c_img[(i+1) % len(c_img)], tt) # [1,1024]
+            c_img = [lerp(c_[i % len(c_)], c_[(i+1) % len(c_)], tt) for c_ in c_img]
         cs, cws = cond_mix(a, csb, cwb, i, tt)
         z_ = slerp(zs[i % len(zs)], zs[(i+1) % len(zs)], tt)
         images = sd.generate(z_, cs, uc, cws=cws, verbose=verbose, c_img=c_img, **gendict)
         return images
-
-    if sd.use_cnet and isset(a, 'control_img'):
-        assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
-        cdict['cnimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
 
     if isset(a, 'in_lats') and os.path.exists(a.in_lats): # load saved latents & conds
         zs, csb, cwb, uc = read_latents(a.in_lats) # [num,1,4,h,w], [num,b,77,768], [num,b], [1,77,768]
@@ -96,6 +92,7 @@ def main():
         cwb /= a.cfg_scale
         count = max(len(zs), len(csb)) # csb or zs may be just one
         H, W = [sh * sd.vae_scale for sh in zs[0].shape[-2:]]
+        texts = None
         print('.. loaded:', count, 'zs', zs.shape, 'csb', csb.shape, 'cwb', cwb.shape, 'uc', uc.shape)
 
     else: # make new latents & conds
@@ -105,8 +102,13 @@ def main():
 
         img_conds = []
         if isset(a, 'img_ref'):
-            cdict['c_img'] = img_conds = sd.img_cus(a.img_ref, isset(a, 'allref')) # list of [2,1,1024]
-            count = max(count, len(img_conds))
+            imrefs, iptypes, allrefs = a.img_ref.split('+'), a.ip_type.split('+'), a.allref.split('+')
+            refcount = max([len(imrefs), len(iptypes), len(allrefs)])
+            for i in range(refcount):
+                img_conds += [sd.img_cus(imrefs[i % len(imrefs)], sd.ips.index(iptypes[i % len(iptypes)]), allref = 'y' in allrefs[i % len(allrefs)].lower())]
+                count = max(count, len(img_conds[-1]))
+        if len(img_conds) > 0:
+            cdict['c_img'] = img_conds
 
         if isset(a, 'in_img'):
             if os.path.isdir(a.in_img): # interpolation between images
@@ -118,7 +120,7 @@ def main():
                 zs  = []
                 pbar = progbar(count)
                 for i in range(count):
-                    if len(img_conds) > 0: cdict['c_img'] = img_conds[i % len(img_conds)]
+                    if len(img_conds) > 0: cdict['c_img'] = [imcond[i % len(imcond)] for imcond in img_conds]
                     zs += [sd.ddim_inv(sd.img_lat(load_img(img_paths[i], size)[0]), uc, **cdict)] # ddim inversion
                     if i==0:
                         W, H = size = [sh * sd.vae_scale for sh in zs[-1].shape[-2:]][::-1] # set size as of the first image
@@ -139,6 +141,10 @@ def main():
         else: # only text interpolation
             W, H = [sd.res]*2 if size is None else size
             zs = [sd.rnd_z(H, W) for i in range(count)]
+
+    if sd.use_cnet and isset(a, 'control_img'):
+        assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
+        cdict['cnimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
 
     # save key latents if needed
     if isinstance(zs, list): zs = torch.stack(zs)
@@ -176,7 +182,7 @@ def main():
             if not a.cguide: # cond lerp (may be incoherent)
                 csb = sum([csb[:,j] * cwb[:,j,None,None] for j in range(csb.shape[1])]).unsqueeze(1)
             if len(img_conds) > 0:
-                cdict['c_img'] = [ img_conds[i % len(img_conds)], img_conds[(i+1) % len(img_conds)] ] # list 2 of lists? [2,1,..] 
+                cdict['c_img'] = [ [imcond[i % len(imcond)] for imcond in img_conds], [imcond[(i+1) % len(imcond)] for imcond in img_conds] ]
             lb.set_conds(csb[i % len(csb)], csb[(i+1) % len(csb)], uc, cws=cwb[0], **cdict) # same weights for all multi conds, same cnet image for whole interpol
             lb.init_lats( zs[i % len(zs)],   zs[(i+1) % len(zs)])
             lb.run_transition(W, H, 1.- a.latblend, a.fstep, reuse = i>0)

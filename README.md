@@ -6,10 +6,10 @@
 
 This is yet another Stable Diffusion toolkit, aimed to be functional, clean & compact enough for various experiments. There's no GUI here, as the target audience are creative coders rather than post-Photoshop users. The latter may check [InvokeAI] or [Fooocus] as convenient production suites, or [ComfyUI] for flexible node-based workflows.  
 
-The toolkit is built on top of the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
+The toolkit is built on top of the [diffusers] library, with occasional additions from the others mentioned below. The following codebases are partially included here (to ensure compatibility and the ease of setup): [Insightface](https://github.com/deepinsight/insightface), [CLIPseg], [LPIPS](https://github.com/richzhang/PerceptualSimilarity).  
 
 Current functions:
-* Text to image, with possible prompting **by reference images** via [IP adapter]
+* Text to image, with possible prompting **by reference images** via [IP adapters]
 * Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (pose, depth, canny edges)
@@ -47,7 +47,7 @@ pip install xformers
 NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
 
 Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [IP adapter] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+[custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [IP adapters] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
 ```
 python download.py
 ```
@@ -78,7 +78,7 @@ python src/latwalk.py -t yourfile.txt -im _in/pix/alex-iby-G_Pk4D9rMLs.jpg --mas
 ```
 * Same as above, with recursive pan/zoom motion (beware of possible imagery degradation on longer runs):
 ```
-python src/recur.py -t yourfile.txt --fstep 5 --scale 0.01 -m 15drm
+python src/recur.py -t yourfile.txt --fstep 5 --scale 0.01
 ```
 * Hallucinate a video, including your real images:
 ```
@@ -101,10 +101,15 @@ There are also few Windows bat-files, slightly simplifying and automating the co
 Text prompts may include brackets for weighting (like `(good) [bad] ((even better)) [[even worse]]`).  
 More radical blending can be achieved with **multiguidance technique**, introduced here (interpolating predicted noise within diffusion denoising loop, instead of conditioning vectors). It can be used to draw images from complex prompts like `good prompt ~1 | also good prompt ~1 | bad prompt ~-0.5` with `--cguide` option, or for animations with `--lguide` option (further enhancing smoothness of [latent blending]). Note that it would slow down generation process.  
 
-It's possible also to use **reference images** as visual prompts by providing the path with `--img_ref ..` option. For a single reference, you can use either a single image, or any file set with `--allref` option. For an ordered scenario, you should provide a directory with image files or subdirectories (with images) to pick them one by one. The latter is preferrable, as the referencing quality is better when using 3-5 images than a single one.
+It's possible also to use **reference images** as visual prompts with [IP adapters] technique by providing the path with `--img_ref ..` option. For a single reference, you can use either a single image, or any file set with `--allref` option. For an ordered scenario, you should provide a directory with image files or subdirectories (with images) to pick them one by one. The latter is preferrable, as the referencing quality is better when using 3-5 images than a single one.
 For instance, this would make a smooth interpolation over a directory of images as visual prompts:  
 ```
 python src/latwalk.py --img_ref _in/pix --latblend 0.8 --size 1024-576
+```
+One can select and/or combine various IP adapters for finer results (joining parameters with `+`).  
+Possible adapters: `plus`, `face-full`, `faceid-plus`, possible types: `face` for face-based adapters, `full`, `scene`, `style` for the base or `plus` ones.
+```
+python src/gen.py --img_ref _in/pix --ipa plus+faceid-plus --ip_type full+face
 ```
 
 
@@ -119,7 +124,7 @@ One can replace `depth` in the commands above with `canny` (edges) or `pose` (if
 Option `-im ...` may be omitted to employ "pure" txt2img method, pushing the result closer to the text prompt:
 ```
 python src/preproc.py -i _in/something.jpg --type canny -o _in/canny
-python src/gen.py --control_mod canny --control_img _in/canny/something.jpg -t "neon glow steampunk" --size 1024-512 --model 15drm
+python src/gen.py --control_mod canny --control_img _in/canny/something.jpg -t "neon glow steampunk" --size 1024-512
 ```
 ControlNet options can be used for interpolations as well (fancy making videomapping over a building photo?):
 ```
@@ -127,7 +132,7 @@ python src/latwalk.py --control_mod canny --control_img _in/canny/something.jpg 
 ```
 also with pan/zoom recursion:
 ```
-python src/recur.py -cmod canny -cnimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02 -m 15drm
+python src/recur.py -cmod canny -cnimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02
 ```
 
 ### Video editing with [TokenFlow]
@@ -143,15 +148,15 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 
 Generate a video from a text prompt with [AnimateDiff] motion adapter (may combine it with any base SD model):
 ```
-python src/anima.py -t "fiery dragon in a China shop" -m 15drm --frames 100 --loop
+python src/anima.py -t "fiery dragon in a China shop" --frames 100 --loop
 ```
 Process existing video:
 ```
-python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -f 0.7 -m 15drm
+python src/anima.py -t "rusty metallic sculpture" -iv yourvideo.mp4 -f 0.7
 ```
 Generate a video interpolation over a text file (as text prompts) and a directory of images (as visual prompts):
 ```
-python src/anima.py -t yourfile.txt -imr _in/pix -m 15drm --frames 200 
+python src/anima.py -t yourfile.txt -imr _in/pix --frames 200 
 ```
 
 Generate a video from a text prompt with [ZeroScope] model (kinda obsolete):
@@ -277,7 +282,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [AnimateDiff]: <https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2>
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>
 [ComfyUI]: <https://github.com/comfyanonymous/ComfyUI>
-[IP adapter]: <https://huggingface.co/h94/IP-Adapter>
+[IP adapters]: <https://huggingface.co/h94/IP-Adapter>
 [SDXL-Lightning]: <https://huggingface.co/ByteDance/SDXL-Lightning>
 [TCD Scheduler]: <https://mhh0318.github.io/tcd/>
 [Self-Attention Guidance]: <https://github.com/KU-CVLAB/Self-Attention-Guidance>

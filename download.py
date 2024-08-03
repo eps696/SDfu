@@ -47,8 +47,8 @@ def main():
     # get_model("https://www.dropbox.com/s/4visx4qcscirvob/sdfu-v2d-unet-fp16.zip?dl=1", 'models/v2', \
               # 'unet2d/diffusion_pytorch_model.bin', 'SD 2-depth model Unet & depth')
 
-    get_model("https://www.dropbox.com/s/ht7qbruw6mxz8le/sdfu-imageenc-fp16.zip?dl=1", 'models', \
-              'image/ip-adapter_sd15.bin', 'IP adapter & CLIPVision models')
+    get_model("https://www.dropbox.com/scl/fi/zcvg092n1n4aqpmoufd70/sdfu-imageref-fp16.zip?rlkey=ompjbfu2um90hyid2rlglv4d8&dl=1", 'models', \
+              'image/ipa.bin', 'IP adapters & CLIPVision models')
 
     get_model("https://www.dropbox.com/s/3sql6gsjmtvw2zo/sdfu-lcm-fp16.zip?dl=1", 'models', \
               'lcm/unet/diffusion_pytorch_model.safetensors', 'LCM few-steps model')

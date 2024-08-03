@@ -41,8 +41,11 @@ def main():
 
     img_conds = []
     if isset(a, 'img_ref'):
-        img_conds = sd.img_cus(a.img_ref, isset(a, 'allref')) # list of [2,1,1024]
-        count = max(count, len(img_conds))
+        imrefs, iptypes, allrefs = a.img_ref.split('+'), a.ip_type.split('+'), a.allref.split('+')
+        refcount = max([len(imrefs), len(iptypes), len(allrefs)])
+        for i in range(refcount):
+            img_conds += [sd.img_cus(imrefs[i % len(imrefs)], sd.ips.index(iptypes[i % len(iptypes)]), allref = 'y' in allrefs[i % len(allrefs)].lower())]
+            count = max(count, len(img_conds[-1]))
 
     if isset(a, 'in_img'):
         assert os.path.exists(a.in_img), "!! Image(s) %s not found !!" % a.in_img
@@ -71,7 +74,7 @@ def main():
         log = texts[i % len(texts)][:80] if len(texts) > 0 else ''
 
         if len(img_conds) > 0:
-            gendict['c_img'] = img_conds[i % len(img_conds)]
+            gendict['c_img'] = [imcond[i % len(imcond)] for imcond in img_conds]
 
         if isset(a, 'in_img'):
             img_path = img_paths[i % len(img_paths)]

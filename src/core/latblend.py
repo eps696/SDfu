@@ -96,10 +96,9 @@ class LatentBlending():
         self.uc        = uc
         self.pool_uc   = pool_uc # sdxl
         self.cnimg     = cnimg
-        if c_img is not None: # pair of [2,1,1024] or pairs ([2,1,1024],[2,1,257,1280]), already with uc
-            c_imgs = c_img if isinstance(c_img[0], list) else [[c] for c in c_img] # pair of lists
-            self.img_emb1 = [c_img[len(c_img)//2:] if self.cfg_scale in [0,1] else c_img for c_img in c_imgs[0]]
-            self.img_emb2 = [c_img[len(c_img)//2:] if self.cfg_scale in [0,1] else c_img for c_img in c_imgs[1]]
+        if c_img is not None: # pair of lists of [2,1,...], already with uc
+            self.img_emb1 = [c_.chunk(2)[1] if self.cfg_scale in [0,1] else c_ for c_ in c_img[0]]
+            self.img_emb2 = [c_.chunk(2)[1] if self.cfg_scale in [0,1] else c_ for c_ in c_img[1]]
         else:
             self.img_emb1 = self.img_emb2 = None
 

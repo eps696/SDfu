@@ -16,7 +16,9 @@ import torch
 import torch.nn.functional as F
 
 from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers.models import AutoencoderKL
+from diffusers.models import AutoencoderKL, ImageProjection
+from diffusers.models.embeddings import IPAdapterPlusImageProjection, IPAdapterFullImageProjection
+from diffusers.models.embeddings import IPAdapterFaceIDImageProjection, IPAdapterFaceIDPlusImageProjection
 from diffusers import StableDiffusionPipeline
 from diffusers.utils import is_accelerate_available, is_accelerate_version
 logging.getLogger('diffusers').setLevel(logging.ERROR)
@@ -104,16 +106,30 @@ class SDfu:
         if isset(a, 'animdiff'): # after lora !
             self.pipe.register_modules(motion_adapter = motion_adapter)
 
-        # load ip adapter = after animatediff
+        # load ip adapters = after animatediff
         if isset(a, 'img_ref'):
-            assert '15' in a.model, "!! IP adapter models are hardcoded for SD 1.5"
-            if a.verbose: print(' loading IP adapter for images', a.img_ref)
             from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection as CLIPimg
             self.image_preproc = CLIPImageProcessor.from_pretrained(os.path.join(a.maindir, 'image/preproc_config.json')) # openai/clip-vit-base-patch32
             self.image_encoder = CLIPimg.from_pretrained(os.path.join(a.maindir, 'image'), torch_dtype=torch.float16).to(device)
-            self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.maindir, 'image/ip-adapter_sd15.bin'), map_location="cpu"))
             self.pipe.register_modules(image_encoder = self.image_encoder)
-            self.pipe.set_ip_adapter_scale(a.imgref_weight)
+            ip_dicts, ip_ws, self.ips = [], [], []
+            srcs, ipas, iptypes, ws = a.img_ref.split('+'), a.ipa.split('+'), a.ip_type.split('+'), a.imgref_weight.split('+')
+            refcount = max([len(srcs), len(ipas), len(iptypes), len(ws)])
+            for i in range(refcount):
+                ipa_name = 'ipa-' + ipas[i % len(ipas)] if len(ipas[i % len(ipas)]) > 0 else 'ipa'
+                iptype = iptypes[i % len(iptypes)]
+                ipw = float(ws[i % len(ws)])
+                if 'face' in iptype:
+                    import insightface
+                    self.face_align = insightface.utils.face_align
+                    self.faceidr = insightface.app.FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider'])
+                    self.faceidr.prepare(ctx_id=0)
+                ip_dicts += [torch.load(os.path.join(a.maindir, 'image/%s.bin' % ipa_name), map_location="cpu")]
+                ip_ws += [{'down': {'block_2':[ipw]*2}} if 'scen' in iptype else {'up': {'block_1': [ipw]*3, 'block_2':[ipw]*3}} if 'styl' in iptype else ipw]
+                self.ips += [iptype]
+                if a.verbose: print(' loading IP adapter %s for images' % ipa_name, srcs[i % len(srcs)])
+            self.unet._load_ip_adapter_weights(ip_dicts)
+            self.pipe.set_ip_adapter_scale(ip_ws)
 
         # load controlnet = after lora
         if isset(a, 'control_mod'):
@@ -281,25 +297,63 @@ class SDfu:
         next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
         return next_sample
 
-    def img_cus(self, img_path, allref=False): # ucs and cs together
+    def ddim_inv(self, lat, cond, cnimg=None, c_img=None): # ddim inversion, slower, ~exact
+        ukwargs = {}
+        if c_img is not None: # list of [2,1,...] encodings for ip adapter, already with uc_img
+            img_conds = [c_.chunk(2)[1] if self.a.cfg_scale in [0,1] else c_ for c_ in c_img]
+            ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
+        with self.run_scope('cuda'):
+            for t in reversed(self.scheduler.timesteps):
+                with torch.no_grad():
+                    if self.use_cnet and cnimg is not None: # controlnet
+                        ctl_downs, ctl_mid = self.cnet(lat, t, cond, cnimg, self.a.control_scale, return_dict=False)
+                        ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
+                    noise_pred = self.unet(lat, t, cond, **ukwargs).sample
+                lat = self.next_step_ddim(noise_pred, t, lat)
+        return lat
+
+    def img_cus(self, img_path, ipnum, allref=False): # ucs and cs together
         assert os.path.exists(img_path), "!! Image ref %s not found !!" % img_path
         if allref is True: # all files at once
-            img_conds = [self.img_cu([load_img(im, 224, tensor=False)[0] for im in img_list(img_path, subdir=True)])]
+            img_conds = [self.img_cu([load_img(im, tensor=False)[0] for im in img_list(img_path, subdir=True)], ipnum)]
         else:
             if os.path.isfile(img_path): # single image
-                img_conds = [self.img_cu(load_img(img_path, 224, tensor=False)[0])] # list 1 of [2,1,1024]
+                img_conds = [self.img_cu(load_img(img_path, tensor=False)[0], ipnum)] # list 1 of [2,1,..]
             else: # every image/subfolder separately
                 subs = sorted(img_list(img_path) + [f.path for f in os.scandir(img_path) if f.is_dir()])
-                img_conds = [self.img_cu([load_img(im, 224,tensor=False)[0] for im in img_list(sub)] if os.path.isdir(sub) \
-                                     else load_img(sub,224,tensor=False)[0]) for sub in subs] # list N of [2,1,1024]
-        return img_conds # list of [2,1,1024]
+                img_conds = [self.img_cu([load_img(im, tensor=False)[0] for im in img_list(sub)] if os.path.isdir(sub) \
+                                     else load_img(sub,tensor=False)[0], ipnum) for sub in subs] # list N of [2,1,..]
+        return img_conds # list of [2,1,1024] base or [2,1,257,1280] plus or [2,1,512] faceid
 
-    def img_cu(self, images): # uc and c together
+    def img_cu(self, images, ipnum): # uc and c together
         with self.run_scope('cuda'):
-            images = self.image_preproc(images, return_tensors="pt").pixel_values.to(device) # [N,3,224,224]
-            cs = self.image_encoder(images).image_embeds.mean(0, keepdim=True) # [1,1024]
-            ucs = torch.zeros_like(cs)
-            return torch.stack([ucs, cs]) # [2,1,1024]
+            if not isinstance(images, list): images = [images]
+            if 'face' in self.ips[ipnum]:
+                faces = [self.faceidr.get(np.array(img)) for img in images]
+                faces = [face[0].normed_embedding if len(face)>0 else np.zeros([512]) for face in faces] # list of [512], first face on every image
+            images_t = self.image_preproc(images, return_tensors="pt").pixel_values.to(device) # [N,3,224,224]
+
+            ip_layer = self.unet.encoder_hid_proj.image_projection_layers[ipnum]
+            if isinstance(ip_layer, ImageProjection): # base ip adapter
+                cs = self.image_encoder(images_t).image_embeds.mean(0, keepdim=True) # [1,1024]
+                ucs = torch.zeros_like(cs)
+            elif isinstance(ip_layer, IPAdapterFaceIDImageProjection): # face id adapter
+                cs = torch.stack([torch.tensor(face).cuda().half() for face in faces]).mean(0, keepdim=True) # [1,512]
+                ucs = torch.zeros_like(cs)
+            elif isinstance(ip_layer, IPAdapterFaceIDPlusImageProjection): # face id plus adapter, fixed for all frames
+                cs = torch.stack([torch.tensor(face).cuda().half() for face in faces]).mean(0, keepdim=True) # [1,512]
+                ucs = torch.zeros_like(cs)
+                clip_cs = self.image_encoder(images_t, output_hidden_states=True).hidden_states[-2].mean(0, keepdim=True) # [1,257,1280]
+                clip_ucs = self.image_encoder(torch.zeros_like(images_t), output_hidden_states=True).hidden_states[-2].mean(0, keepdim=True)
+                ip_layer.clip_embeds = torch.stack([clip_ucs, clip_cs]).to(dtype=torch.float16)
+                if isset(self.a, 'animdiff'): ip_layer.clip_embeds = ip_layer.clip_embeds.repeat_interleave(self.a.ctx_frames, dim=0) # fix for framesets
+                ip_layer.shortcut = 'plus2' in self.a.ipa.split('+')[ipnum % len(self.a.ipa.split('+'))] # True if plus v2
+            elif isinstance(ip_layer, (IPAdapterPlusImageProjection, IPAdapterFullImageProjection)): # plus-family adapters
+                cs = self.image_encoder(images_t, output_hidden_states=True).hidden_states[-2].mean(0, keepdim=True) # [1,257,1280]
+                ucs = self.image_encoder(torch.zeros_like(images_t), output_hidden_states=True).hidden_states[-2].mean(0, keepdim=True)
+            else:
+                print(' unknown IP adapter \n', ip_layer); exit()
+            return torch.stack([ucs, cs]) # [2,1,1024] base or [2,1,257,1280] plus or [2,1,512] faceid
 
     def img_lat(self, image, deterministic=False):
         with self.run_scope('cuda'):
@@ -307,23 +361,6 @@ class SDfu:
             lats = postr.mean if deterministic else postr.sample(self.g_)
             lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
-
-    def ddim_inv(self, lat, cond, cnimg=None, c_img=None): # ddim inversion, slower, ~exact
-        ukwargs = {}
-        if c_img is not None: # ip adapter
-            img_conds = c_img[-1:] if self.a.cfg_scale in [0,1] else c_img
-            ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
-        with self.run_scope('cuda'):
-            for t in reversed(self.scheduler.timesteps):
-                with torch.no_grad():
-                    if self.use_cnet and cnimg is not None: # controlnet
-                        ctl_downs, ctl_mid = self.cnet(lat, t, cond, cnimg, 1, return_dict=False)
-                        ctl_downs = [ctl_down * self.a.control_scale for ctl_down in ctl_downs]
-                        ctl_mid *= self.a.control_scale
-                        ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
-                    noise_pred = self.unet(lat, t, cond, **ukwargs).sample
-                lat = self.next_step_ddim(noise_pred, t, lat)
-        return lat
 
     def lat_z(self, lat): # ddim stochastic encode, fast, not exact
         with self.run_scope('cuda'):
@@ -403,10 +440,14 @@ class SDfu:
             if cnimg is not None and len(lat.shape)==4: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
             if c_img is not None:  # already with uc_img
-                if len(cs) > 1 and len(c_img) == 2: c_img = c_img.repeat_interleave(len(cs), 0)
-                img_conds = c_img.chunk(2)[1] if cfg_scale in [0,1] else c_img # only c if no scale, to keep correct shape
-                img_uncond = c_img.chunk(2)[0]
-                if self.a.batch > 1: img_conds = img_conds.repeat_interleave(self.a.batch, 0)
+                c_imgs = c_img if isinstance(c_img, list) else [c_img]
+                img_conds, img_uncond = [], []
+                for c_img in c_imgs:
+                    if len(cs) > 1 and len(c_img)==2: c_img = c_img.repeat_interleave(len(cs), 0)
+                    img_cond = c_img.chunk(2)[1] if cfg_scale in [0,1] else c_img # only c if no scale, to keep correct shape
+                    img_uncond += [c_img.chunk(2)[0]]
+                    if self.a.batch > 1: img_cond = img_cond.repeat_interleave(self.a.batch, 0)
+                    img_conds += [img_cond] # [2*f, 1, ...]
             if self.use_kdiff or self.use_lcm or self.a.sampler=='tcd': # trailing (lcm) or k- schedulers require reset on every generation
                 self.set_steps(self.a.steps, self.a.strength)
             sagkwargs = {}
