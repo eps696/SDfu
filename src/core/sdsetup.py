@@ -116,7 +116,9 @@ class SDfu:
             srcs, ipas, iptypes, ws = a.img_ref.split('+'), a.ipa.split('+'), a.ip_type.split('+'), a.imgref_weight.split('+')
             refcount = max([len(srcs), len(ipas), len(iptypes), len(ws)])
             for i in range(refcount):
-                ipa_name = 'ipa-' + ipas[i % len(ipas)] if len(ipas[i % len(ipas)]) > 0 else 'ipa'
+                ipa_name = ipas[i % len(ipas)]
+                ipa_path = ipa_name if os.path.exists(ipa_name) else os.path.join(a.maindir, 'image', ipa_name)
+                if not os.path.isfile(ipa_path): ipa_path = os.path.join(a.maindir, 'image/%s.bin' % ('ipa-' + ipa_name if len(ipa_name) > 0 else 'ipa'))
                 iptype = iptypes[i % len(iptypes)]
                 ipw = float(ws[i % len(ws)])
                 if 'face' in iptype:
@@ -124,10 +126,10 @@ class SDfu:
                     self.face_align = insightface.utils.face_align
                     self.faceidr = insightface.app.FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider'])
                     self.faceidr.prepare(ctx_id=0)
-                ip_dicts += [torch.load(os.path.join(a.maindir, 'image/%s.bin' % ipa_name), map_location="cpu")]
+                ip_dicts += [torch.load(ipa_path, map_location="cpu")]
                 ip_ws += [{'down': {'block_2':[ipw]*2}} if 'scen' in iptype else {'up': {'block_1': [ipw]*3, 'block_2':[ipw]*3}} if 'styl' in iptype else ipw]
                 self.ips += [iptype]
-                if a.verbose: print(' loading IP adapter %s for images' % ipa_name, srcs[i % len(srcs)])
+                if a.verbose: print(' loading IP adapter %s for images' % os.path.basename(ipa_path), srcs[i % len(srcs)])
             self.unet._load_ip_adapter_weights(ip_dicts)
             self.pipe.set_ip_adapter_scale(ip_ws)
 

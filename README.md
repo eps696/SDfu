@@ -107,7 +107,7 @@ For instance, this would make a smooth interpolation over a directory of images 
 python src/latwalk.py --img_ref _in/pix --latblend 0.8 --size 1024-576
 ```
 One can select and/or combine various IP adapters for finer results (joining parameters with `+`).  
-Possible adapters: `plus`, `face-full`, `faceid-plus`, possible types: `face` for face-based adapters, `full`, `scene`, `style` for the base or `plus` ones.
+Possible adapters: `plus`, `face-full`, `faceid-plus` or the file path. Possible types: `face` for face-based adapters; `full`, `scene` or `style` for the rest.
 ```
 python src/gen.py --img_ref _in/pix --ipa plus+faceid-plus --ip_type full+face
 ```
