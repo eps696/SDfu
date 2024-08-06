@@ -106,8 +106,9 @@ For instance, this would make a smooth interpolation over a directory of images 
 ```
 python src/latwalk.py --img_ref _in/pix --latblend 0.8 --size 1024-576
 ```
-One can select and/or combine various IP adapters for finer results (joining parameters with `+`).  
-Possible adapters: `plus`, `face-full`, `faceid-plus` or the file path. Possible types: `face` for face-based adapters; `full`, `scene` or `style` for the others.
+One can select and/or combine various IP adapters for finer results (joining related parameters with `+`).  
+Possible adapters: `plus`, `face-full`, `faceid-plus` or the file path.  
+Possible types: `face` for face-based adapters; `full`, `scene` or `style` for the others.
 ```
 python src/gen.py --img_ref _in/pix --ipa plus+faceid-plus --ip_type full+face
 ```
@@ -116,16 +117,17 @@ NB: For the time of writing, none of the face-based adapters can guarantee real 
 
 ## Guide synthesis with [ControlNet]
 
-* Generate an image from existing one, using its depth map as conditioning (extra guiding source):
+* Generate an image from existing one, using its depth map as conditioning (control source for extra guiding):
 ```
 python src/preproc.py -i _in/something.jpg --type depth -o _in/depth
 python src/gen.py --control_mod depth --control_img _in/depth/something.jpg -im _in/something.jpg -t "neon glow steampunk" -f 1
 ```
-One can replace `depth` in the commands above with `canny` (edges), `pose` (if there are humans in the source) or `deptha` ([Depth Anything 2], very precise method). For the latter, depth maps are saved as dual-band 8bit png files to keep the float16 precision.  
+Posssible control types/modes are: `depth` ([MiDaS](https://github.com/isl-org/MiDaS)), `canny` (edges), `pose` (if there are human figures in the source) or `deptha` ([Depth Anything 2](https://github.com/DepthAnything/Depth-Anything-V2), very precise method). For the latter, depth maps are saved/loaded as dual-band 8bit png files to keep the float16 precision.  
+
 Option `-im ...` may be omitted to employ "pure" txt2img method, pushing the result closer to the text prompt:
 ```
-python src/preproc.py -i _in/something.jpg --type canny -o _in/canny
-python src/gen.py --control_mod canny --control_img _in/canny/something.jpg -t "neon glow steampunk" --size 1024-512
+python src/preproc.py -i _in/something.jpg --type deptha -o _in/deptha
+python src/gen.py --control_mod deptha --control_img _in/deptha/something.jpg -t "neon glow steampunk" --size 1024-512
 ```
 ControlNet options can be used for interpolations as well (fancy making videomapping over a building photo?):
 ```
@@ -135,7 +137,7 @@ also with pan/zoom recursion:
 ```
 python src/recur.py -cmod canny -cnimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02
 ```
-One can also select and/or combine various Controlnets for finer results (joining parameters with `+`):
+Finally, one can select and/or combine various Controlnets for finer results (joining related parameters with `+`):
 ```
 python src/gen.py -cmod depth+deptha -cnimg _in/depth/something.jpg+_in/deptha/something.jpg -cts 0.3+0.2 -t "neon glow steampunk" -f 1
 ```
@@ -292,6 +294,5 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [TCD Scheduler]: <https://mhh0318.github.io/tcd/>
 [Self-Attention Guidance]: <https://github.com/KU-CVLAB/Self-Attention-Guidance>
 [ConceptLab]: <https://kfirgoldberg.github.io/ConceptLab>
-[Depth Anything 2]: <https://github.com/DepthAnything/Depth-Anything-V2>
 [Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
 [instruct-pix2pix]: <https://huggingface.co/timbrooks/instruct-pix2pix>

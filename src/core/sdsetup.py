@@ -218,7 +218,7 @@ class SDfu:
             scheduler = LCMScheduler.from_pretrained(os.path.join(a.maindir, 'lcm/scheduler/scheduler_config.json'))
         elif a.sampler == 'dpm':
             from diffusers.schedulers import DPMSolverMultistepScheduler
-            scheduler = DPMSolverMultistepScheduler(beta_start=0.0001, beta_end=0.02, beta_schedule="scaled_linear", solver_order=2, sample_max_value=1.)
+            scheduler = DPMSolverMultistepScheduler(beta_schedule="scaled_linear", **sched_args)
         else:
             if a.sampler == 'ddim':
                 from diffusers.schedulers import DDIMScheduler as Sched
@@ -235,10 +235,10 @@ class SDfu:
             elif a.sampler == 'lms':
                 from diffusers.schedulers import LMSDiscreteScheduler as Sched
             elif a.sampler == 'tcd':
-                from diffusers.schedulers.scheduling_tcd import TCDScheduler as Sched
+                from diffusers.schedulers import TCDScheduler as Sched
             else:
                 print(' Unknown sampler', a.sampler); exit()
-            scheduler = Sched.from_pretrained(self.sched_path)
+            scheduler = Sched.from_pretrained(self.sched_path, **sched_args)
         return scheduler
 
     def final_setup(self, a):
