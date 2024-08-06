@@ -20,6 +20,8 @@ def get_args(parser):
     parser.add_argument(       '--curve',   default='linear', help="Interpolating curve: bezier, parametric, custom or linear")
     parser.add_argument(       '--loop',    action='store_true', help='Loop inputs [or stop at the last one]')
     parser.add_argument(       '--skiplast', action='store_true', help='Skip repeating last frame (for smoother animation)')
+    # override
+    parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
     return parser.parse_args()
 
 def cond_mix(a, csb, cwb, i, tt=0):
@@ -143,8 +145,14 @@ def main():
             zs = [sd.rnd_z(H, W) for i in range(count)]
 
     if sd.use_cnet and isset(a, 'control_img'):
-        assert os.path.isfile(a.control_img), "!! ControlNet image %s not found !!" % a.control_img
-        cdict['cnimg'] = (load_img(a.control_img, (W,H))[0] + 1) / 2
+        control_imgs = a.control_img.split('+')[:len(sd.cns)]
+        assert len(control_imgs) == len(sd.cns), "Number of control images %d and models %d must match" % (len(control_imgs), len(sd.cns))
+        cn_imgs = []
+        for cn_img, cnet_mod in zip(control_imgs, sd.cns):
+            assert os.path.isfile(cn_img), f"!! ControlNet image {cn_img} not found !!"
+            dual8b = basename(cnet_mod) == 'deptha' # 16bit
+            cn_imgs += [(load_img(cn_img, (W,H), dual8b=dual8b)[0] + 1) / 2]
+        cdict['cnimg'] = cn_imgs
 
     # save key latents if needed
     if isinstance(zs, list): zs = torch.stack(zs)

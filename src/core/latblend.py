@@ -400,12 +400,6 @@ class LatentBlending():
             ukwargs = {}
             if im_cond is not None: # encoded img for ip adapter
                 ukwargs['added_cond_kwargs'] = {"image_embeds": im_cond}
-            if self.sd.use_cnet and self.cnimg is not None: # controlnet
-                ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cnimg, 1, return_dict=False)
-                ctl_downs = [ctl_down * self.sd.a.control_scale for ctl_down in ctl_downs]
-                ctl_mid *= self.sd.a.control_scale
-                ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid, **ukwargs}
-
             lat_in = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers
             if self.cfg_scale > 0:
                 if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
@@ -417,6 +411,9 @@ class LatentBlending():
                     bs = len(cond) + 1
                     cond_in = torch.cat([self.uc, cond])
                 lat_in = torch.cat([lat_in] * bs)
+                if self.sd.use_cnet and self.cnimg is not None: # controlnet
+                    ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cnimg, self.sd.cnet_ws, return_dict=False)
+                    ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid, **ukwargs}
                 noises = self.sd.unet(lat_in, t, cond_in, **ukwargs).sample.chunk(bs) # pred noise residual at step t
                 noise_pred = noises[0] # uncond
                 for n in range(len(cond)): # multi guidance

@@ -12,16 +12,16 @@ Current functions:
 * Text to image, with possible prompting **by reference images** via [IP adapters]
 * Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
-* Guidance with [ControlNet] (pose, depth, canny edges)
+* Guidance with [ControlNet] (depth, depth-anything, pose, canny edges)
 * **Video generation** with [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
 * Smooth & stable video edit with [TokenFlow]
 * **Ultra-fast generation** with [TCD Scheduler] or [SDXL-Lightning] model (combined with other features)
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
 
 Fine-tuning with your images:
-* Add subject (new token) with [textual inversion]
+* Add subject (new token) with [Textual Inversion]
 	* Same with **inventing novel imagery** with [ConceptLab]
-* Add subject (new token + Unet delta) with [custom diffusion]
+* Add subject (new token + Unet delta) with [Custom Diffusion]
 * Add subject (Unet low rank delta) with [LoRA]
 
 Other features:
@@ -107,10 +107,11 @@ For instance, this would make a smooth interpolation over a directory of images 
 python src/latwalk.py --img_ref _in/pix --latblend 0.8 --size 1024-576
 ```
 One can select and/or combine various IP adapters for finer results (joining parameters with `+`).  
-Possible adapters: `plus`, `face-full`, `faceid-plus` or the file path. Possible types: `face` for face-based adapters; `full`, `scene` or `style` for the rest.
+Possible adapters: `plus`, `face-full`, `faceid-plus` or the file path. Possible types: `face` for face-based adapters; `full`, `scene` or `style` for the others.
 ```
 python src/gen.py --img_ref _in/pix --ipa plus+faceid-plus --ip_type full+face
 ```
+NB: For the time of writing, none of the face-based adapters can guarantee real portrait similarity. Try using [Custom Diffusion] finetuning (below) if you need a human-level face recognizability. Otherwise, just post-process results with third-party face-swapping methods.
 
 
 ## Guide synthesis with [ControlNet]
@@ -120,7 +121,7 @@ python src/gen.py --img_ref _in/pix --ipa plus+faceid-plus --ip_type full+face
 python src/preproc.py -i _in/something.jpg --type depth -o _in/depth
 python src/gen.py --control_mod depth --control_img _in/depth/something.jpg -im _in/something.jpg -t "neon glow steampunk" -f 1
 ```
-One can replace `depth` in the commands above with `canny` (edges) or `pose` (if there are humans in the source).  
+One can replace `depth` in the commands above with `canny` (edges), `pose` (if there are humans in the source) or `deptha` ([Depth Anything 2], very precise method). For the latter, depth maps are saved as dual-band 8bit png files to keep the float16 precision.  
 Option `-im ...` may be omitted to employ "pure" txt2img method, pushing the result closer to the text prompt:
 ```
 python src/preproc.py -i _in/something.jpg --type canny -o _in/canny
@@ -133,6 +134,10 @@ python src/latwalk.py --control_mod canny --control_img _in/canny/something.jpg 
 also with pan/zoom recursion:
 ```
 python src/recur.py -cmod canny -cnimg _in/canny/something.jpg -cts 0.5 -t yourfile.txt --size 1024-640 -fs 5 -is 12 --scale 0.02
+```
+One can also select and/or combine various Controlnets for finer results (joining parameters with `+`):
+```
+python src/gen.py -cmod depth+deptha -cnimg _in/depth/something.jpg+_in/deptha/something.jpg -cts 0.3+0.2 -t "neon glow steampunk" -f 1
 ```
 
 ### Video editing with [TokenFlow]
@@ -172,7 +177,7 @@ NB: this model is limited to rather mundane stuff, don't expect any notable leve
 
 ## Fine-tuning
 
-* Train new token embedding for a specific subject (e.g. cat) with [textual inversion]:
+* Train new token embedding for a specific subject (e.g. cat) with [Textual Inversion]:
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.001 --type text
 ```
@@ -180,11 +185,11 @@ python src/train.py --token mycat1 --term cat --data data/mycat1 -lr 0.001 --typ
 ```
 python src/train.py --data data/mycat1 -lr 0.0001 --type lora
 ```
-* Train both token embedding & Unet attentions with [custom diffusion]:
+* Train both token embedding & Unet attentions with [Custom Diffusion]:
 ```
 python src/train.py --token mycat1 --term cat --data data/mycat1 --term_data data/cat --type custom
 ```
-Add `--style` if you're training for a style rather than an object. Speed up [custom diffusion] with `--xformers` ([LoRA] takes care of it on its own); add `--low_mem` if you get OOM.   
+Add `--style` if you're training for a style rather than an object. Speed up [Custom Diffusion] with `--xformers` ([LoRA] takes care of it on its own); add `--low_mem` if you get OOM.   
 Results of the trainings will be saved under `train` directory. 
 
 Custom diffusion trains faster and can achieve impressive reproduction quality (including faces) with simple similar prompts, but it can lose the point on generation if the prompt is too complex or aside from the original category. To train it, you'll need both target reference images (`data/mycat1`) and more random images of similar subjects (`data/cat`). Apparently, you can generate the latter with SD itself.  
@@ -201,11 +206,11 @@ python src/trainew.py --token mypet --term pet
 ```
 python src/gen.py -t "cosmic beast cat" --load_lora mycat1-lora.pt
 ```
-* Same with [custom diffusion]:
+* Same with [Custom Diffusion]:
 ```
 python src/gen.py -t "cosmic <mycat1> cat beast" --load_custom mycat1-custom.pt
 ```
-* Same with [textual inversion] (you may provide a folder path to load few files at once):
+* Same with [Textual Inversion] (you may provide a folder path to load few files at once):
 ```
 python src/gen.py -t "cosmic <mycat1> cat beast" --load_token mycat1-text.pt
 ```
@@ -273,8 +278,8 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [CLIPseg]: <https://github.com/timojl/clipseg>
 [ControlNet]: <https://github.com/lllyasviel/ControlNet>
 [TokenFlow]: <https://github.com/omerbt/TokenFlow>
-[textual inversion]: <https://textual-inversion.github.io>
-[custom diffusion]: <https://github.com/adobe-research/custom-diffusion>
+[Textual Inversion]: <https://textual-inversion.github.io>
+[Custom Diffusion]: <https://github.com/adobe-research/custom-diffusion>
 [LoRA]: <https://github.com/cloneofsimo/lora>
 [latent blending]: <https://github.com/lunarring/latentblending>
 [LCM]: <https://latent-consistency-models.github.io>
@@ -287,5 +292,6 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [TCD Scheduler]: <https://mhh0318.github.io/tcd/>
 [Self-Attention Guidance]: <https://github.com/KU-CVLAB/Self-Attention-Guidance>
 [ConceptLab]: <https://kfirgoldberg.github.io/ConceptLab>
+[Depth Anything 2]: <https://github.com/DepthAnything/Depth-Anything-V2>
 [Instruct pix2pix]: <https://github.com/timothybrooks/instruct-pix2pix>
 [instruct-pix2pix]: <https://huggingface.co/timbrooks/instruct-pix2pix>

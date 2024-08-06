@@ -56,9 +56,13 @@ def main():
 
     cn_imgs = []
     if sd.use_cnet and isset(a, 'control_img'):
-        assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
-        cn_imgs = img_list(a.control_img) if os.path.isdir(a.control_img) else [a.control_img]
-        count = max(count, len(cn_imgs))
+        control_imgs = a.control_img.split('+')[:len(sd.cns)]
+        assert len(control_imgs) == len(sd.cns), "Number of control images %d and models %d must match" % (len(control_imgs), len(sd.cns))
+        for cn_img in control_imgs:
+            assert os.path.exists(cn_img), f"!! ControlNet image {cn_img} not found !!"
+            cn_imgs += [img_list(cn_img) if os.path.isdir(cn_img) else [cn_img]]
+            count = max(count, len(cn_imgs[-1]))
+        if len(cn_imgs) != len(sd.cns): print('!! %d CNet inputs != %d CNet models !!' % (len(cn_imgs), len(sd.cns)))
 
     def genmix(z_, cs, cws, **gendict):
         if a.cguide: # use noise lerp with cfg scaling (slow!)
@@ -102,7 +106,7 @@ def main():
             z_ = sd.rnd_z(H, W)
 
         if len(cn_imgs) > 0:
-            gendict['cnimg'] = (load_img(cn_imgs[i % len(cn_imgs)], (W,H))[0] + 1) / 2
+            gendict['cnimg'] = [(load_img(ci[i % len(ci)], (W,H), dual8b = ('deptha' in sd.cns[i]))[0] + 1) / 2 for i, ci in enumerate(cn_imgs)]
 
         images = genmix(z_, csb[i % len(csb)], cwb[i % len(cwb)], **gendict)
 

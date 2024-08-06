@@ -135,11 +135,19 @@ class SDfu:
 
         # load controlnet = after lora
         if isset(a, 'control_mod'):
-            if not os.path.exists(a.control_mod): a.control_mod = os.path.join(a.maindir, 'control', a.control_mod)
-            assert os.path.exists(a.control_mod), "Not found ControlNet model %s" % a.control_mod
-            if a.verbose: print(' loading ControlNet', a.control_mod)
             from diffusers import ControlNetModel
-            self.cnet = ControlNetModel.from_pretrained(a.control_mod, torch_dtype=torch.float16)
+            from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
+            cns, cis, cnws = a.control_mod.split('+'), a.control_img.split('+'), [float(s) for s in a.control_scale.split('+')]
+            cn_count = max([len(cns), len(cis), len(cnws)])
+            self.cns = [cns[i % len(cns)] for i in range(cn_count)]
+            self.cnet_ws = [cnws[i % len(cnws)] for i in range(cn_count)]
+            cnets = []
+            for cn in self.cns:
+                if not os.path.exists(cn): cn = os.path.join(self.a.maindir, 'control', cn)
+                assert os.path.exists(cn), "Not found ControlNet model %s" % cn
+                cnets += [ControlNetModel.from_pretrained(cn, torch_dtype=torch.float16)]
+            self.cnet = MultiControlNetModel(cnets)
+            if a.verbose: print(' loading ControlNets', self.cns)
             if not self.a.lowmem: self.cnet.to(device)
             self.pipe.register_modules(controlnet=self.cnet)
         self.use_cnet = hasattr(self, 'cnet')
@@ -308,7 +316,7 @@ class SDfu:
             for t in reversed(self.scheduler.timesteps):
                 with torch.no_grad():
                     if self.use_cnet and cnimg is not None: # controlnet
-                        ctl_downs, ctl_mid = self.cnet(lat, t, cond, cnimg, self.a.control_scale, return_dict=False)
+                        ctl_downs, ctl_mid = self.cnet(lat, t, cond, cnimg, self.cnet_ws, return_dict=False)
                         ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                     noise_pred = self.unet(lat, t, cond, **ukwargs).sample
                 lat = self.next_step_ddim(noise_pred, t, lat)
@@ -439,7 +447,7 @@ class SDfu:
             conds = uc if cfg_scale==0 else cs if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
             bs = len(conds) // (len(uc) * self.a.batch)
-            if cnimg is not None and len(lat.shape)==4: cnimg = cnimg.repeat_interleave(len(conds) // len(cnimg), 0)
+            if cnimg is not None and len(lat.shape)==4: cnimg = [ci.repeat_interleave(len(conds) // len(ci), 0) for ci in cnimg]
             if ilat is not None: ilat = ilat.repeat_interleave(len(conds) // len(ilat), 0)
             if c_img is not None:  # already with uc_img
                 c_imgs = c_img if isinstance(c_img, list) else [c_img]
@@ -503,7 +511,7 @@ class SDfu:
                     bx = rearrange(x, 'b c f h w -> (b f) c h w' ) # bs repeat, frames interleave
                     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                         self.unet.to("cpu"); torch.cuda.empty_cache()
-                    ctl_downs, ctl_mid = self.cnet(bx, t, conds, cnimg.repeat(bs,1,1,1), self.a.control_scale, return_dict=False)
+                    ctl_downs, ctl_mid = self.cnet(bx, t, conds, [ci.repeat(bs,1,1,1) for ci in cnimg], self.cnet_ws, return_dict=False)
                     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                         self.cnet.to("cpu"); torch.cuda.empty_cache()
                     return ctl_downs, ctl_mid
@@ -512,7 +520,7 @@ class SDfu:
                     if self.use_cnet and cnimg is not None: # controlnet = max 960x640 or 768 on 16gb
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.unet.to("cpu"); torch.cuda.empty_cache()
-                        ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, self.a.control_scale, return_dict=False)
+                        ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, self.cnet_ws, return_dict=False)
                         ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
                             self.cnet.to("cpu"); torch.cuda.empty_cache()
@@ -526,12 +534,12 @@ class SDfu:
                         for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
                             conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
                             if c_img is not None: # ip adapter
-                                ukwargs['added_cond_kwargs']["image_embeds"] = torch.cat([cc[slids] for cc in img_conds.chunk(bs)])
+                                ukwargs['added_cond_kwargs']['image_embeds'] = [torch.cat([cc[slids] for cc in imcond.chunk(bs)]) for imcond in img_conds]
                                 if self.a.sag_scale > 0:
                                     imcc = img_conds if cfg_scale in [0,1] else img_uncond
                                     sagkwargs['added_cond_kwargs']['image_embeds'] = imcc[slids]
                             if self.use_cnet and cnimg is not None: # controlnet
-                                ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds_, cnimg[slids])
+                                ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds_, [ci[slids] for ci in cnimg])
                                 ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                             noise_pred_sub = calc_noise(lat_in[:,:,slids], t, conds_, ukwargs)
                             noise_pred[:,:,slids] += noise_pred_sub

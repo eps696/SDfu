@@ -48,7 +48,7 @@ def main():
               # 'unet2d/diffusion_pytorch_model.bin', 'SD 2-depth model Unet & depth')
 
     get_model("https://www.dropbox.com/scl/fi/zcvg092n1n4aqpmoufd70/sdfu-imageref-fp16.zip?rlkey=ompjbfu2um90hyid2rlglv4d8&dl=1", 'models', \
-              'image/ipa.bin', 'IP adapters & CLIPVision models')
+              'image/ipa-faceid-plus.bin', 'IP adapters & CLIPVision models')
 
     get_model("https://www.dropbox.com/s/3sql6gsjmtvw2zo/sdfu-lcm-fp16.zip?dl=1", 'models', \
               'lcm/unet/diffusion_pytorch_model.safetensors', 'LCM few-steps model')
@@ -60,7 +60,7 @@ def main():
               'anima/diffusion_pytorch_model.safetensors', 'AnimateDiff motion model')
 
     get_model("https://www.dropbox.com/s/qhe1zpbubjr3t75/sdfu-controlnet.zip?dl=1", 'models', \
-              'control/depth/diffusion_pytorch_model.bin', 'ControlNet models')
+              'control/deptha/diffusion_pytorch_model.safetensors', 'ControlNet models')
 
     # get_model("https://www.dropbox.com/s/n1z21ds5eauzk4m/sdfu-ip2p-unet-fp16.zip?dl=1", 'models/v1', \
               # 'unet1p2p/diffusion_pytorch_model.bin', 'Instruct pix2pix Unet')

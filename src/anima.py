@@ -95,16 +95,27 @@ def main():
         gendict['c_img'] = [framestack(img_cond, a.frames, a.curve, a.loop, rejoin=True) for img_cond in img_conds]
 
     if sd.use_cnet and isset(a, 'control_img'):
-        assert os.path.exists(a.control_img), "!! ControlNet image(s) %s not found !!" % a.control_img
-        if os.path.isdir(a.control_img):
-            cn_imgs = [load_img(path)[0] for path in img_list(a.control_img)][:a.frames]
-            assert len(cn_imgs) == a.frames, "!! Not enough ControlNet images: %d, total frame count %d !!" % (len(cn_imgs), a.frames)
-        else:
-            cn_imgs = [load_img(a.control_img)[0]] * a.frames
-        cn_imgs = torch.cat(cn_imgs) / 2. + 0.5 # [0..1] [f,c,h,w]
-        if list(cn_imgs.shape[-2:]) != [H, W]:
-            cn_imgs = F.interpolate(cn_imgs, (H, W), mode='bicubic', align_corners=True)
-        gendict['cnimg'] = cn_imgs
+        cn_imgs_all = []
+        control_imgs = a.control_img.split('+')[:len(sd.cns)]
+        assert len(control_imgs) == len(sd.cns), "Number of control images and models must match"
+        for cn_img, cnet_mod in zip(control_imgs, sd.cns):
+            assert os.path.exists(cn_img), f"!! ControlNet image(s) {cn_img} not found !!"
+            dual8b = basename(cnet_mod) == 'deptha' # 16bit
+            if os.path.isdir(cn_img):
+                cn_imgs = [load_img(path, (W,H), dual8b=dual8b)[0] for path in img_list(cn_img)]
+            else:
+                cn_imgs = [load_img(cn_img, (W,H), dual8b=dual8b)[0]]
+            if isset(a, 'frames'):
+                cn_imgs = cn_imgs[:a.frames]
+            else:
+                a.frames = max(a.ctx_frames, len(cn_imgs))
+            cn_imgs = torch.cat(cn_imgs) / 2. + 0.5  # [0..1] [n,c,h,w]
+            if len(cn_imgs) == 1:
+                cn_imgs = cn_imgs.repeat(a.frames,1,1,1)
+            elif len(cn_imgs) < a.frames:
+                print(f"!! Not enough ControlNet images for model {sd.cns[i]}: {len(cn_imgs)}, total frame count {a.frames} !!"); exit()
+            cn_imgs_all.append(cn_imgs)
+        gendict['cnimg'] = cn_imgs_all
 
     if a.verbose: 
         print('.. frames', a.frames, '.. model', a.model, '..', a.sampler, '..', '%dx%d' % (W,H), '..', a.cfg_scale, '..', a.strength, '..', sd.seed)

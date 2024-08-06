@@ -24,10 +24,10 @@ def main_args():
     parser.add_argument('-o',  '--out_dir', default="_out", help="Output directory for generated images")
     parser.add_argument('-md', '--maindir', default='./models', help='Main SD models directory')
     # ip adapters
-    parser.add_argument('-imr','--img_ref', default=None, help='Reference image or directory with images (overrides width and height)')
-    parser.add_argument('-imw', '--imgref_weight', default='0.3', help='Weight[s] for the reference image(s), relative to the text prompt')
-    parser.add_argument('-ip', '--ipa',     default='', help='IP adapter model name')
-    parser.add_argument('-ipt','--ip_type', default='full', help='IP adapter type = full, scen, style, face')
+    parser.add_argument('-imr','--img_ref', default=None, help="Reference image[s] or directory[s] with images, separated by '+'")
+    parser.add_argument('-imw', '--imgref_weight', default='0.3', help="Weight[s] for the reference image(s), separated by '+'")
+    parser.add_argument('-ip', '--ipa',     default='', help="IP adapter model name[s], separated by '+'")
+    parser.add_argument('-ipt','--ip_type', default='full', help="IP adapter type[s] = full, scene, style, face; separated by '+'")
     parser.add_argument('-ar',  '--allref', default='', help='y = apply all reference images at once, n = pick one by one')
     # mandatory params
     parser.add_argument('-m',  '--model',   default='15drm', help="SD model to use")
@@ -37,7 +37,7 @@ def main_args():
     parser.add_argument('-f', '--strength', default=1, type=float, help="strength of image processing. 0 = preserve img, 1 = replace it completely")
     parser.add_argument('-if', '--img_scale', default=None, type=float, help='image guidance scale for Instruct pix2pix. None = disabled it')
     parser.add_argument('-eta','--eta',     default=0., type=float)
-    parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
+    parser.add_argument('-s',  '--steps',   default=37, type=int, help="number of diffusion steps")
     parser.add_argument('-b',  '--batch',   default=1, type=int, help="batch size")
     parser.add_argument(   '--vae_batch',   default=8, type=int, help="batch size for VAE decoding")
     parser.add_argument('-n',  '--num',     default=1, type=int, help="Repeat prompts N times")
@@ -47,9 +47,9 @@ def main_args():
     parser.add_argument('-rd', '--load_custom', default=None, help="path to the custom diffusion delta checkpoint")
     parser.add_argument('-rl', '--load_lora', default=None, help="path to the LoRA file")
     # controlnet
-    parser.add_argument('-cmod', '--control_mod', default=None, help="path to the ControlNet model")
-    parser.add_argument('-cnimg','--control_img', default=None, help="path to the ControlNet driving image (contour, pose, etc)")
-    parser.add_argument('-cts', '--control_scale', default=0.7, type=float, help="ControlNet effect scale")
+    parser.add_argument('-cmod', '--control_mod', default=None, help="Path[s] to the ControlNet models, separated by '+'")
+    parser.add_argument('-cnimg','--control_img', default=None, help="Path[s] to the ControlNet driving images, separated by '+'")
+    parser.add_argument('-cts', '--control_scale', default='0.7', help="ControlNet effect scale[s], separated by '+'")
     # misc
     parser.add_argument('-cg', '--cguide',  action='store_true', help='Use noise guidance for interpolation, instead of cond lerp')
     parser.add_argument('-fu',  '--freeu',  action='store_true', help='Use FreeU enhancement (Fourier representations in Unet)')

@@ -131,7 +131,21 @@ def triblur(x, k=3, pow=1.0):
     x = x.reshape(b,c,h,w)
     return x
 
-def load_img(path, size=None, tensor=True, quant=8, pad=False):
+def mono16_to_dual8(x): # np array [h,w,c]
+    x = (x * 65025.).astype(np.uint16)
+    hi = (x >> 8).astype(np.uint8)  # High byte
+    lo = (x & 0xFF).astype(np.uint8)  # Low byte
+    zero = np.zeros_like(hi, dtype=np.uint8)
+    return np.vstack((hi, lo, zero)).transpose(1,2,0)
+
+def dual8_to_mono16(x): # np array [h,w,c]
+    hi = x[:,:,0]
+    lo = x[:,:,1]
+    result = (hi.astype(np.uint16) << 8) | lo.astype(np.uint16)
+    result = (result / 65025).astype(np.float32).clip(0,1)
+    return result.reshape(x.shape[0], x.shape[1], 1).repeat(3, axis=2)
+
+def load_img(path, size=None, tensor=True, quant=8, pad=False, gpu=True, dual8b=False):
     image = Image.open(path).convert('RGB')
     if isinstance(size, int): size = [size,size]
     if size is None: size = image.size
@@ -145,9 +159,12 @@ def load_img(path, size=None, tensor=True, quant=8, pad=False):
             resampl = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
             image = image.resize((w,h), resampl) # (w,h)
     if not tensor: return image, (w,h)
-    image = np.array(image).astype(np.float32) / 255.0
-    image = image[None].transpose(0,3,1,2)
-    image = torch.from_numpy(image).to(device, dtype=torch.float16)
+    if dual8b:
+        image = dual8_to_mono16(np.array(image))
+    else:
+        image = np.array(image).astype(np.float32) / 255.
+    image = torch.from_numpy(image[None].transpose(0,3,1,2))
+    if gpu: image = image.to(device, dtype=torch.float16)
     return 2.*image - 1., (w,h)
 
 def save_img(image, num, out_dir, prefix='', filepath=None, ext='jpg'):
