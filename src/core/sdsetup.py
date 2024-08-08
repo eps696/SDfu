@@ -408,7 +408,7 @@ class SDfu:
 
     def sag_masking(self, orig_lats, attn_map, map_size, t, eps):
         bh, hw1, hw2 = attn_map.shape # [8*f,h,w]
-        h = self.unet.config.attention_head_dim
+        h = self.unet.config.attention_head_dim if isset(self.unet.config, 'attention_head_dim') else self.unet.config.num_attention_heads
         if isinstance(h, list): h = h[-1]
         if len(orig_lats.shape)==4:
             orig_lats = orig_lats.unsqueeze(2) # make compatible with unet3D
@@ -537,7 +537,7 @@ class SDfu:
                                 ukwargs['added_cond_kwargs']['image_embeds'] = [torch.cat([cc[slids] for cc in imcond.chunk(bs)]) for imcond in img_conds]
                                 if self.a.sag_scale > 0:
                                     imcc = img_conds if cfg_scale in [0,1] else img_uncond
-                                    sagkwargs['added_cond_kwargs']['image_embeds'] = imcc[slids]
+                                    sagkwargs['added_cond_kwargs']['image_embeds'] = [imcond[slids] for imcond in imcc]
                             if self.use_cnet and cnimg is not None: # controlnet
                                 ctl_downs, ctl_mid = calc_cnet_batch(lat_in[:,:,slids], t, conds_, [ci[slids] for ci in cnimg])
                                 ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
