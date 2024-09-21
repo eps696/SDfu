@@ -52,7 +52,7 @@ class SDfu:
         # settings
         self.a = a
         self.device = device
-        self.run_scope = nullcontext # torch.autocast
+        self.run_scope = torch.autocast # nullcontext fails
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
         a.unprompt = unprompt(a)
@@ -480,7 +480,8 @@ class SDfu:
                         sagkwargs['added_cond_kwargs'] = {"image_embeds": img_conds} if cfg_scale in [0,1] else {"image_embeds": img_uncond}
 
                 def calc_noise(x, t, conds, ukwargs={}):
-                    if cfg_scale in [0, 1]:
+                    self.unet.to(device)
+                    if len(x) == 1 and len(conds) == 1: # no guidance
                         noise_pred = self.unet(x, t, conds, **ukwargs).sample
                     elif ilat is not None and isset(self.a, 'img_scale'): # instruct pix2pix
                         noises = self.unet(torch.cat([x, ilat], dim=1), t, conds).sample.chunk(bs)

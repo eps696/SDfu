@@ -13,7 +13,7 @@ Current functions:
 * Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (depth, depth-anything, pose, canny edges)
-* **Video generation** with [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
+* **Video generation** with [CogVideoX], [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
 * Smooth & stable video edit with [TokenFlow]
 * **Ultra-fast generation** with [TCD Scheduler] or [SDXL-Lightning] model (combined with other features)
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
@@ -153,7 +153,20 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 
 ## Text to Video
 
-Generate a video from a text prompt with [AnimateDiff] motion adapter (may combine it with any base SD model):
+Generate a video from the text prompt (make it as detailed as possible!) with **[CogVideoX]** model:
+```
+python src/cogx.py -t "late afternoon light casting long shadows,a cyclist athlet pedaling down a scenic mountain track" --frames 101 --loop --dyn_cfg
+```
+Process existing video:
+```
+python src/cogx.py -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth" -iv yourvideo.mp4 -f 0.8
+```
+Generate a video from an image:
+```
+python src/cogx.py -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth" -im yourimage.jpg --frames 101 --loop
+```
+
+Generate a video from a text prompt with **[AnimateDiff]** motion adapter (may combine it with any base SD model):
 ```
 python src/anima.py -t "fiery dragon in a China shop" --frames 100 --loop
 ```
@@ -166,7 +179,7 @@ Generate a video interpolation over a text file (as text prompts) and a director
 python src/anima.py -t yourfile.txt -imr _in/pix --frames 200 
 ```
 
-Generate a video from a text prompt with [ZeroScope] model (kinda obsolete):
+Generate a video from a text prompt with **[ZeroScope]** model (kinda obsolete):
 ```
 python src/vid.py -t "fiery dragon in a China shop" --model vzs --frames 100 --loop
 ```
@@ -286,6 +299,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [latent blending]: <https://github.com/lunarring/latentblending>
 [LCM]: <https://latent-consistency-models.github.io>
 [Kandinsky]: <https://huggingface.co/kandinsky-community>
+[CogVideoX]: <https://github.com/THUDM/CogVideo>
 [AnimateDiff]: <https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2>
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>
 [ComfyUI]: <https://github.com/comfyanonymous/ComfyUI>
