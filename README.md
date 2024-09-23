@@ -155,15 +155,19 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 
 Generate a video from the text prompt (make it as detailed as possible!) with **[CogVideoX]** model:
 ```
-python src/cogx.py -t "late afternoon light casting long shadows,a cyclist athlet pedaling down a scenic mountain track" --frames 101 --loop --dyn_cfg
+python src/cogx.py --frames 101 --loop --dyn_cfg -t "late afternoon light casting long shadows,a cyclist athlet pedaling down a scenic mountain track"
 ```
-Process existing video:
+Redraw existing video:
 ```
-python src/cogx.py -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth" -iv yourvideo.mp4 -f 0.8
+python src/cogx.py -iv yourvideo.mp4 -f 0.8 -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth"
 ```
-Generate a video from an image:
+Continue existing video, using last 12 frames as overlap for further generation:
 ```
-python src/cogx.py -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth" -im yourimage.jpg --frames 101 --loop
+python src/cogx.py -iv yourvideo.mp4 --frames 101 --overlap 12 -t "chaotic battle of prehistoric creatures at birtdhay party in a scientific lab" 
+```
+Generate a video from a directory of images with 50 frames between keyframes:
+```
+python src/cogx.py -im yourimagedir --fstep 50 -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth"
 ```
 
 Generate a video from a text prompt with **[AnimateDiff]** motion adapter (may combine it with any base SD model):

@@ -24,13 +24,15 @@ from diffusers.video_processor import VideoProcessor
 from diffusers.models.embeddings import get_3d_rotary_pos_embed
 from diffusers.utils import load_image, load_video
 
-from core.args import main_args, unprompt
+from core.args import main_args
 from core.text import read_txt, txt_clean
 from core.utils import isset, gpu_ram, basename, progbar, save_cfg
 
 def get_args(parser):
     parser.add_argument('-iv', '--in_vid',  default=None, help='input video or directory with images')
-    parser.add_argument('-vf', '--frames',  default=49, type=int, help="Frame count for generated video")
+    parser.add_argument('-fs', '--fstep',   default=None, type=int, help="number of frames for each interpolation step (1 = no interpolation)")
+    parser.add_argument('-vf', '--frames',  default=None, type=int, help="Frame count for generated video")
+    parser.add_argument('-ov', '--overlap', default=None, type=int, help="Cut these frames from the input video to expand further")
     parser.add_argument('-cf', '--ctx_frames', default=13, type=int, help="latent count to process at once with sliding window sampling")
     parser.add_argument('-dc', '--dyn_cfg', action='store_true', help='Dynamic CFG scale - good for txt2vid')
     parser.add_argument('-fps', '--fps',    default=12, type=int, help="Frame rate")
@@ -38,6 +40,7 @@ def get_args(parser):
     # override
     parser.add_argument('-C','--cfg_scale', default=6, type=float, help="prompt guidance scale")
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
+    parser.add_argument('-un','--unprompt', default='low quality, oversaturated', help='Negative prompt')
     return parser.parse_args()
 
 device = torch.device("cuda")
@@ -52,10 +55,9 @@ class CogX:
         self.a = a
         self.device = device
         self.seed = a.seed or int((time.time()%1)*69696)
-        a.unprompt = unprompt(a)
 
-        mod_path = os.path.join("models/cogx", 'i2v' if isset(a, 'in_img') and os.path.isfile(a.in_img) else 'main')
-        if not os.path.isdir(mod_path): mod_path = 'THUDM/CogVideoX-5b-I2V' if isset(a, 'in_img') and os.path.isfile(a.in_img) else 'THUDM/CogVideoX-5b'
+        mod_path = os.path.join("models/cogx", 'i2v' if isset(a, 'img2vid') else 'main')
+        if not os.path.isdir(mod_path): mod_path = 'THUDM/CogVideoX-5b-I2V' if isset(a, 'img2vid') else 'THUDM/CogVideoX-5b'
         dtype = torch.bfloat16
 
         self.tokenizer = T5Tokenizer.from_pretrained(mod_path, subfolder="tokenizer")
@@ -77,7 +79,7 @@ class CogX:
                 quantize(self.vae, weights=qfloat8);          freeze(self.vae)
                 self.pipe.to("cuda")
             except:
-                print(' Quantization support requires Optimum library with Python 3.10+ and Torch 2.4')
+                print(' Quantization support requires optimum-quanto library with Python 3.10+ and Torch 2.4')
 
         self.pipe.enable_model_cpu_offload()
         # self.pipe.enable_sequential_cpu_offload()
@@ -145,22 +147,34 @@ class CogX:
         lat = self.vae.config.scaling_factor * lat
         return lat # [b,f,c,h,w]
 
-    def make_lat(self, bs=1, ch=16, num_frm=13, height=60, width=90, image=None, video=None, dtype=None):
-        if video is not None: num_frm = video.size(2)
-        num_frm = (num_frm - 1) // self.vae_scale_t + 1
-        shape = (bs, num_frm, ch, height // self.vae_scale_s, width // self.vae_scale_s)
+    @staticmethod
+    def cals_ids(length, count):
+        if count == 1: return [0]
+        return [int(i * (length-1) / (count-1)) for i in range(count)]
+
+    def make_lat(self, bs=1, ch=16, num_frames=49, height=60, width=90, image=None, imgpos=None, video=None, dtype=None):
+        num_frm = (num_frames - 1) // self.vae_scale_t + 1
+        shape = (bs, num_frm, ch, height // self.vae_scale_s, width // self.vae_scale_s) # [1,13,16,60,90]
 
         img_lat = None
-        if image is not None:
-            pad_shape = (bs, num_frm - 1, ch, height // self.vae_scale_s, width // self.vae_scale_s)
-            lat_pad = torch.zeros(pad_shape, device=self.device, dtype=dtype)
-            img_lat = self.init_lat(image.unsqueeze(2), dtype)
-            img_lat = torch.cat([img_lat, lat_pad], dim=1)
+        if image is not None: # [n,c,h,w]
+            if imgpos is None: imgpos = self.cals_ids(num_frm, len(image))
+            img_lat = torch.zeros(shape, device=self.device, dtype=dtype) # [1,13,16,60,90]
+            in_lats = self.init_lat(image.unsqueeze(2), dtype) # [n,1,16,60,90]
+            for i, n in enumerate(imgpos):
+                img_lat[:,n] = in_lats[i]
 
+        elif video is not None and num_frames > video.size(2): # video expansion
+            img_lat = self.init_lat(video, dtype) # [b,f,c,h,w]
+            pad_shape = (bs, num_frm - img_lat.shape[1], *shape[2:])
+            pad_lat = torch.zeros(pad_shape, device=self.device, dtype=dtype)
+            img_lat = torch.cat([img_lat, pad_lat], dim=1) # [b,F,c,h,w]
+        
         lat = torch.randn(shape, generator=self.g_, device=self.device, dtype=dtype)
-        if video is not None:
-            vid_lat = self.init_lat(video, dtype)
-            lat = self.scheduler.add_noise(vid_lat, lat, self.lat_timestep)
+        if video is not None: # [b,c,f,h,w]
+            vid_lat = self.init_lat(video, dtype) # [b,f,c,h,w]
+            vid_frm = vid_lat.shape[1]
+            lat[:,:vid_frm] = self.scheduler.add_noise(vid_lat, lat[:,:vid_frm], self.lat_timestep)
         lat *= self.scheduler.init_noise_sigma
 
         return lat, img_lat
@@ -173,13 +187,13 @@ class CogX:
         return video
 
 
-    def generate(self, cs, H, W, num_frames, image=None, video=None):
+    def generate(self, cs, H, W, num_frames, image=None, imgpos=None, video=None):
         bs = 1 if self.a.cfg_scale in [0,1] else 2
         steps = self.set_steps(self.a.steps, strength = self.a.strength)
 
         lat_ch = self.transformer.config.in_channels
-        if image is not None: lat_ch = lat_ch // 2
-        lat, img_lat = self.make_lat(self.a.num, lat_ch, num_frames, H, W, image, video, dtype=cs.dtype)
+        if isset(self.a, 'img2vid'): lat_ch = lat_ch // 2
+        lat, img_lat = self.make_lat(self.a.num, lat_ch, num_frames, H, W, image, imgpos, video, dtype=cs.dtype)
         fcount = lat.size(1)
         img_rot_emb = self.get_rot_pos_emb(H, W, self.a.ctx_frames) if self.transformer.config.use_rotary_positional_embeddings else None
 
@@ -196,7 +210,7 @@ class CogX:
         for i, t in enumerate(self.timesteps):
             lat_in = self.scheduler.scale_model_input(lat, t)
             lat_in = torch.cat([lat_in] * bs) # [2,13,16,60,90]
-            if image is not None:
+            if isset(self.a, 'img2vid'):
                 lat_img_in = torch.cat([img_lat] * bs)
                 lat_in = torch.cat([lat_in, lat_img_in], dim=2)
 
@@ -272,33 +286,53 @@ def main():
     a = get_args(main_args())
     os.makedirs(a.out_dir, exist_ok=True)
     gendict = {}
-    if a.verbose: save_cfg(a, a.out_dir)
+
+    if isset(a, 'in_img'):
+        assert os.path.exists(a.in_img), "Not found %s" % a.in_img
+        img_paths = img_list(a.in_img) if os.path.isdir(a.in_img) else [a.in_img]
+        in_img = [load_image(f) for f in img_paths]
+        if isset(a, 'fstep') and not isset(a, 'frames'): a.frames = a.fstep * len (in_img)
+        a.img2vid = True
+
+    elif isset(a, 'in_vid'):
+        assert os.path.exists(a.in_vid), "Not found %s" % a.in_vid
+        in_vid = load_video(a.in_vid) # list of pil
+        if isset(a, 'frames'): 
+            if isset(a, 'overlap'):
+                start_vid = in_vid[:-a.overlap]
+                in_vid = in_vid[-a.overlap:]
+            elif a.frames < len(in_vid): 
+                in_vid = in_vid[:a.frames]
+        if not isset(a, 'frames'): a.frames = len(in_vid)
+        if a.frames > len(in_vid): a.img2vid = True
 
     cogx = CogX(a)
     a = cogx.a
 
-    if a.size is None: a.size = [720,480] # [x * cogx.vae_scale_s for x in [cogx.transformer.config.sample_width, cogx.transformer.config.sample_height]]
-
-    W, H = [int(x) for x in a.size]
+    W, H = [720,480] if a.size is None else [int(s) for s in a.size.split('-')]
+    # [x * cogx.vae_scale_s for x in [cogx.transformer.config.sample_width, cogx.transformer.config.sample_height]]
     a.in_txt = ['. '.join([a.pretxt, s, a.postxt]) for s in read_txt(a.in_txt)]
+    if a.verbose: save_cfg(a, a.out_dir)
+    count = 1
 
     cs = cogx.encode_prompt(a.in_txt, a.unprompt, a.num) # [2,226,4096]
 
-    if isset(a, 'in_img') and os.path.isfile(a.in_img):
-        assert os.path.isfile(a.in_img), "Not found %s" % a.in_img
-        in_img = load_image(a.in_img)
+    if isset(a, 'in_img'):
         in_img = cogx.video_processor.preprocess(in_img, height=H, width=W).to(device, dtype=cs.dtype)
         gendict['image'] = in_img
 
     if isset(a, 'in_vid'):
-        assert os.path.exists(a.in_vid), "Not found %s" % a.in_vid
-        in_vid = load_video(a.in_vid)
-        a.frames = len(in_vid)
         video = cogx.video_processor.preprocess_video(in_vid, height=H, width=W).to(device, dtype=cs.dtype)
-        size = list(video.shape[-2:])
+        if isset(a, 'overlap'):
+            start_vid = cogx.video_processor.preprocess_video(start_vid, height=H, width=W).to(device, dtype=cs.dtype) / 2 + 0.5
         gendict['video'] = video
 
-    video = cogx.generate(cs, H, W, a.frames, **gendict) # [b,f,c,h,w]
+    if not isset(a, 'frames'): a.frames = 49
+
+    video = cogx.generate(cs, H, W, a.frames, **gendict)[0] # [b,f,c,h,w]
+
+    if isset(a, 'in_vid') and isset(a, 'overlap'):
+        video = torch.cat([start_vid.permute(0,2,1,3,4)[0], video])
 
     outname = []
     if isset(a, 'in_vid'): outname += [basename(a.in_vid)]
@@ -306,7 +340,7 @@ def main():
     if len(a.in_txt) > 0: outname += [txt_clean(basename(a.in_txt[0] if isinstance(a.in_txt, list) else a.in_txt))]
     outname = '-'.join(outname)[:69]
     outpath = os.path.join(a.out_dir, '%s-%d.mp4' % (outname, cogx.seed))
-    save_video(video[0], outpath, a.fps)
+    save_video(video, outpath, a.fps)
 
 
 if __name__ == '__main__':
