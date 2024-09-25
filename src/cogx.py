@@ -26,7 +26,7 @@ from diffusers.utils import load_image, load_video
 
 from core.args import main_args
 from core.text import read_txt, txt_clean
-from core.utils import isset, gpu_ram, basename, progbar, save_cfg
+from core.utils import isset, gpu_ram, img_list, basename, progbar, save_cfg
 
 def get_args(parser):
     parser.add_argument('-iv', '--in_vid',  default=None, help='input video or directory with images')
