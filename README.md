@@ -161,14 +161,15 @@ Redraw existing video:
 ```
 python src/cogx.py -iv yourvideo.mp4 -f 0.8 -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth"
 ```
-Continue existing video, using last 12 frames as overlap for further generation:
+Continue existing video, using last 12 frames as overlap for further generation (experimental):
 ```
 python src/cogx.py -iv yourvideo.mp4 --frames 101 --overlap 12 -t "chaotic battle of prehistoric creatures at birtdhay party in a scientific lab" 
 ```
-Generate a video from a directory of images with 50 frames between keyframes:
+Generate a video from a directory of images with 50 frames between keyframes (very experimental):
 ```
 python src/cogx.py -im yourimagedir --fstep 50 -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth"
 ```
+NB: Generation of longer sequences is obviously abnormal use of the CogX model, and often leads to degraded quality and leaked stock watermark appearance, so use it with care. It's more recommended to achieve necessary length by prolonging previous video pieces in a few 49-frames steps.
 
 Generate a video from a text prompt with **[AnimateDiff]** motion adapter (may combine it with any base SD model):
 ```
