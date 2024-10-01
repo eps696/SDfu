@@ -33,8 +33,10 @@ def get_args(parser):
     parser.add_argument('-fs', '--fstep',   default=None, type=int, help="number of frames for each interpolation step (1 = no interpolation)")
     parser.add_argument('-vf', '--frames',  default=None, type=int, help="Frame count for generated video")
     parser.add_argument('-ov', '--overlap', default=None, type=int, help="Cut these frames from the input video to expand further")
+    parser.add_argument('-oo', '--ctx_over', default=2, type=int, help="Overlap for sliding window denoising")
     parser.add_argument('-cf', '--ctx_frames', default=13, type=int, help="latent count to process at once with sliding window sampling")
     parser.add_argument('-dc', '--dyn_cfg', action='store_true', help='Dynamic CFG scale - good for txt2vid')
+    parser.add_argument('-re', '--rot_emb', action='store_true', help='Extend rotary-position embeddings to sequence length')
     parser.add_argument('-fps', '--fps',    default=12, type=int, help="Frame rate")
     parser.add_argument('--loop',           action='store_true')
     # override
@@ -210,8 +212,8 @@ class CogX:
             if fcount > self.a.ctx_frames: # sliding sampling for long videos
                 noise_pred = torch.zeros_like(lat)
                 slide_count = torch.zeros((1, fcount, 1, 1, 1), device=lat_in.device)
-                for slids in uniform_slide(i, fcount, self.a.ctx_frames, loop=self.a.loop):
-                    if img_rot_emb is not None: img_rot_emb = self.get_rot_pos_emb(H, W, time_ids = slids)
+                for slids in uniform_slide(i, fcount, self.a.ctx_frames, self.a.ctx_over, loop=self.a.loop):
+                    if self.a.rot_emb and img_rot_emb is not None: img_rot_emb = self.get_rot_pos_emb(H, W, time_ids = slids)
                     noise_pred_sub = calc_noise(lat_in[:,slids], t, cs, img_rot_emb)
                     noise_pred[:,slids] += noise_pred_sub
                     slide_count[:,slids] += 1 # increment which indices were used

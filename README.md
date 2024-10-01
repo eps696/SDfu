@@ -155,21 +155,21 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 
 Generate a video from the text prompt (make it as detailed as possible!) with **[CogVideoX]** model:
 ```
-python src/cogx.py --frames 101 --loop --dyn_cfg -t "late afternoon light casting long shadows,a cyclist athlet pedaling down a scenic mountain track"
+python src/cogx.py --frames 101 --loop -t "late afternoon light casting long shadows,a cyclist athlet pedaling down a scenic mountain track"
 ```
 Redraw existing video:
 ```
 python src/cogx.py -iv yourvideo.mp4 -f 0.8 -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth"
 ```
-Continue existing video, using last 12 frames as overlap for further generation (experimental):
+Continue existing video, using last 9 video frames (or 3 in VAE latent space) as overlap for further generation (experimental):
 ```
-python src/cogx.py -iv yourvideo.mp4 --frames 101 --overlap 12 -t "chaotic battle of prehistoric creatures at birtdhay party in a scientific lab" 
+python src/cogx.py -iv yourvideo.mp4 --frames 101 --overlap 9 -t "chaotic battle of prehistoric creatures at birtdhay party in a scientific lab" 
 ```
 Generate a video from a directory of images with 50 frames between keyframes (very experimental):
 ```
 python src/cogx.py -im yourimagedir --fstep 50 -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth"
 ```
-NB: Generation of longer sequences is obviously abnormal use of the CogX model, and often leads to degraded quality and leaked stock watermark appearance, so use it with care. It's more recommended to achieve necessary length by prolonging previous video pieces in a few 49-frames steps.
+NB: Generation of longer sequences is an abnormal use of the current CogX model, and often leads to degraded quality and leaked stock watermark appearance (especially with image-to-video model), so use it with care. Option `--rot_emb` (recalculate positional embeddings for full length) may give better temporal consistency but deteriorated image quality. More reliable way to achieve necessary length may be to prolong previous video pieces in a few 49-frames steps. You can also try `--dyn_cfg` option for text-to-video generations (works better for shorter pieces).
 
 Generate a video from a text prompt with **[AnimateDiff]** motion adapter (may combine it with any base SD model):
 ```
