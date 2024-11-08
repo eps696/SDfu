@@ -400,7 +400,7 @@ class LatentBlending():
             ukwargs = {}
             if im_cond is not None: # encoded img for ip adapter
                 ukwargs['added_cond_kwargs'] = {"image_embeds": im_cond}
-            lat_in = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scales only k-samplers
+            lat_in = self.sd.scheduler.scale_model_input(lat.to(self.sd.unet.device, dtype=self.sd.unet.dtype), t) # scales only k-samplers
             if self.cfg_scale > 0:
                 if isinstance(cond, list) and len(cond) == 3: # multi guided lerp
                     cond, cond2, mix = cond
