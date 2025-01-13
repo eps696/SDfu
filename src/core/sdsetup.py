@@ -242,7 +242,8 @@ class SDfu:
         return scheduler
 
     def final_setup(self, a):
-        if isxf and not isset(a, 'img_ref'): self.pipe.enable_xformers_memory_efficient_attention() # !!! breaks ip adapter
+        if isxf and not (isset(a, 'img_ref') or isset(a, 'animdiff')): # !!! breaks ip adapter or animdiff
+            self.pipe.enable_xformers_memory_efficient_attention()
         if isset(a, 'freeu'): self.pipe.unet.enable_freeu(s1=1.5, s2=1.6, b1=0.9, b2=0.2) # 2.1 1.4, 1.6, 0.9, 0.2, sdxl 1.3, 1.4, 0.9, 0.2
 
         self.sched_kwargs = {'eta': a.eta} if "eta" in set(inspect.signature(self.scheduler.step).parameters.keys()) else {}
