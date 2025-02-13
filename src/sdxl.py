@@ -20,7 +20,7 @@ from core.args import main_args
 from core.text import read_txt, txt_clean
 from core.utils import img_list, load_img, save_img, lerp, slerp, blend, basename, makemask, framestack, progbar, save_cfg, cvshow, calc_size, isok, isset
 from core.sdsetup import uniform_slide
-from core.unet_motion_model import animdiff_forward
+# from core.unet_motion_model import animdiff_forward
 
 try: # colab
     get_ipython().__class__.__name__
@@ -91,7 +91,7 @@ class SDfu:
             return os.path.join(a.models_dir, name) if os.path.exists(os.path.join(a.models_dir, name)) else url
 
         base_url = 'stabilityai/stable-diffusion-xl-base-1.0'
-        self.pipe = StableDiffusionXLPipeline.from_pretrained(get_model('base', base_url), torch_dtype=torch.float16, variant="fp16")
+        self.pipe = StableDiffusionXLPipeline.from_pretrained(get_model('base', base_url), torch_dtype=torch.float16)
         self.pipe.scheduler = self.set_scheduler(a, get_model('base', base_url))
 
         if a.lightning is True and a.steps in [2,4,8]: # lightning
@@ -140,14 +140,14 @@ class SDfu:
             if os.path.exists(os.path.join(a.models_dir, 'image')):
                 self.image_preproc = CLIPImageProcessor.from_pretrained(os.path.join(a.models_dir, 'image/preproc_config.json'))
                 self.image_encoder = CLIPimg.from_pretrained(os.path.join(a.models_dir, 'image'), torch_dtype=torch.float16).to(device)
-                self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.models_dir, 'image/ip-adapter_sdxl.bin'), map_location="cpu"))
+                self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.models_dir, 'image/ipa-xl.bin'), map_location="cpu"))
             else:
                 self.image_preproc = CLIPImageProcessor.from_pretrained('runwayml/stable-diffusion-v1-5', subfolder='feature_extractor')
                 self.image_encoder = CLIPimg.from_pretrained('h94/IP-Adapter', subfolder='sdxl_models/image_encoder', torch_dtype=torch.float16).to(device)
                 self.unet._load_ip_adapter_weights(torch.load(hf_hub_download('h94/IP-Adapter', 'sdxl_models/ip-adapter_sdxl.bin'), map_location="cpu"))
                 
             self.pipe.register_modules(image_encoder = self.image_encoder)
-            self.pipe.set_ip_adapter_scale(a.imgref_weight)
+            self.pipe.set_ip_adapter_scale(float(a.imgref_weight))
 
         self.sched_kwargs = {'eta': a.eta} if "eta" in set(inspect.signature(self.scheduler.step).parameters.keys()) else {}
         if "generator" in set(inspect.signature(self.scheduler.step).parameters.keys()):
@@ -384,7 +384,7 @@ def main():
 
 # animatediff
     if a.animdiff is not None: 
-        setattr(sd.unet, 'forward', animdiff_forward.__get__(sd.unet, sd.unet.__class__)) # fix forward function of the motion model to allow batched conditions
+        # setattr(sd.unet, 'forward', animdiff_forward.__get__(sd.unet, sd.unet.__class__)) # fix forward function of the motion model to allow batched conditions
 
         if isset(a, 'in_vid'):
             assert os.path.exists(a.in_vid), "Not found %s" % a.in_vid
