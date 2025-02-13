@@ -47,7 +47,7 @@ def main():
     os.makedirs(a.out_dir, exist_ok=True)
     if a.verbose: save_cfg(a, a.out_dir)
 
-    def genvid(videoin, model, W, H, strength=a.strength, out=False): # a
+    def genvid(videoin, model, W, H, a, out=False): # a
         if model is None:
             return videoin
 
@@ -57,7 +57,7 @@ def main():
         a.seed = sd.seed # to keep it further
         csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
         uc = multiprompt(sd, a.unprompt)[0][0]
-        if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', strength, '..', sd.seed)
+        if a.verbose: print('.. model', a.model, '..', a.sampler, '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
 
         def genmix(z_, cs, cws):
             if a.cguide: # use noise lerp with cfg scaling (slower)
@@ -74,7 +74,7 @@ def main():
             if len(videoin) > 0:
                 video = videoin[i % len(videoin)].cuda()
                 video = F.interpolate(video, (H, W), mode='bicubic', align_corners=True)
-                sd.set_steps(a.steps, strength)
+                sd.set_steps(a.steps, a.strength)
                 z_ = sd.img_z(video) # [f,c,h,w]
                 z_ = z_.permute(1,0,2,3)[None,:] # [1,c,f,h,w]
             else:
@@ -101,11 +101,11 @@ def main():
             videoin += [video / 127.5 - 1.]
 
     # Lo res
-    videoin = genvid(videoin, a.model, 576, 320, out=True)
+    videoin = genvid(videoin, a.model, 576, 320, a, out=True)
 
     # Hi res
     # torch.cuda.empty_cache()
-    # genvid(videoin, a.model_up, 1024, 576)
+    # genvid(videoin, a.model_up, 1024, 576, a)
 
 
 if __name__ == '__main__':

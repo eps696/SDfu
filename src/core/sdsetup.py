@@ -463,7 +463,7 @@ class SDfu:
                 self.set_steps(self.a.steps, self.a.strength)
             sagkwargs = {}
 
-            if verbose and not iscolab: pbar = progbar(len(self.timesteps) - offset)
+            if verbose: pbar = progbar(len(self.timesteps) - offset)
             for tnum, t in enumerate(self.timesteps[offset:]):
                 ukwargs = {} # kwargs placeholder for unet
                 lat_in = self.scheduler.scale_model_input(lat, t) # ~ 1/std(z) ?? https://github.com/huggingface/diffusers/issues/437
@@ -534,7 +534,7 @@ class SDfu:
                         noise_pred = torch.zeros_like(lat)
                         slide_count = torch.zeros((1, 1, lat_in.shape[2], 1, 1), device=lat_in.device)
                         for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
-                            conds_ = conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
+                            conds_ = conds if 'vzs' in self.a.model else conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
                             if c_img is not None: # ip adapter
                                 ukwargs['added_cond_kwargs']['image_embeds'] = [torch.cat([cc[slids] for cc in imcond.chunk(bs)]) for imcond in img_conds]
                                 if self.a.sag_scale > 0:
@@ -559,7 +559,7 @@ class SDfu:
                 else:
                     lat = self.scheduler.step(noise_pred, t, lat, **self.sched_kwargs).prev_sample # compute previous noisy sample x_t -> x_t-1
 
-                if verbose and not iscolab: pbar.upd()
+                if verbose: pbar.upd()
 
             if self.use_lcm:
                 lat = latend
