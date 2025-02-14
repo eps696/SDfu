@@ -148,10 +148,10 @@ python src/gen.py -cmod depth+deptha -cnimg _in/depth/something.jpg+_in/deptha/s
 python src/tokenflow.py -im _in/yoursequence -t "rusty metallic sculpture" --batch_size 4 --batch_pivot --cpu
 ```
 TokenFlow employs either `pnp` or `sde` method and can be used with various models & ControlNet options.  
-*NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume long sequences by design. Pivots batching & CPU offloading (introduced in this repo) pushed the limits, yet didn't removed them. As an example, I managed to process only 300+ frames of 960x540 on a 3090 GPU in batches of 5 without OOM (or without going to the 10x slower shared RAM with new Nvidia drivers).*
+*NB: this method handles all frames at once (that's why it's so stable). As such, it cannot consume long sequences by design. Pivots batching & CPU offloading (introduced in this repo) pushed the limits, yet didn't removed them. As an example, I managed to process only 300+ frames of 960x540 on a 3090 GPU in batches of 5 without video-memory overflow.*
 
 
-## Text to Video
+## Video Synthesis
 
 Generate a video from the text prompt (make it as detailed as possible!) with **[CogVideoX]** model:
 ```
