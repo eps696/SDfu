@@ -45,7 +45,10 @@ def get_args(parser):
     parser.add_argument('-un','--unprompt', default='low quality, oversaturated', help='Negative prompt')
     return parser.parse_args()
 
-device = torch.device("cuda")
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.bfloat16 if is_cuda or is_mac else torch.float32
 
 class CogXpipe(CogVideoXPipeline):
     def __init__(self, tokenizer, text_encoder, vae, transformer, scheduler):
@@ -60,7 +63,7 @@ class CogX:
 
         mod_path = os.path.join("models/cogx", 'i2v' if isset(a, 'img2vid') else 'main')
         if not os.path.isdir(mod_path): mod_path = 'THUDM/CogVideoX-5b-I2V' if isset(a, 'img2vid') else 'THUDM/CogVideoX-5b'
-        dtype = torch.bfloat16
+        
 
         self.tokenizer = T5Tokenizer.from_pretrained(mod_path, subfolder="tokenizer")
         self.text_encoder = T5EncoderModel.from_pretrained(mod_path, subfolder="text_encoder", torch_dtype=dtype)
@@ -79,17 +82,18 @@ class CogX:
                 quantize(self.text_encoder, weights=qfloat8); freeze(self.text_encoder)
                 quantize(self.transformer, weights=qfloat8);  freeze(self.transformer)
                 quantize(self.vae, weights=qfloat8);          freeze(self.vae)
-                self.pipe.to("cuda")
+                self.pipe.to(device)
             except:
                 print(' Quantization support requires optimum-quanto library with Python 3.10+ and Torch 2.4')
 
         self.pipe.enable_model_cpu_offload()
         # self.pipe.enable_sequential_cpu_offload()
-        self.transformer.to(memory_format=torch.channels_last)
+        if not is_mac:
+            self.transformer.to(memory_format=torch.channels_last)
         self.vae.enable_slicing()
         self.vae.enable_tiling()
 
-        self.g_ = torch.Generator("cuda").manual_seed(self.seed)
+        self.g_ = torch.Generator(device).manual_seed(self.seed)
 
         self.sched_kwargs = {'eta': a.eta} if "eta" in set(inspect.signature(self.scheduler.step).parameters.keys()) else {}
         if "generator" in set(inspect.signature(self.scheduler.step).parameters.keys()):
@@ -112,7 +116,7 @@ class CogX:
     def get_t5_emb(self, prompt=None, num=1, maxlen=226):
         tokens = self.tokenizer(prompt, padding="max_length", max_length=maxlen, truncation=True, add_special_tokens=True, return_tensors="pt")
         cs = self.text_encoder(tokens.input_ids.to(self.device))[0]
-        return cs.to(self.device, dtype=self.text_encoder.dtype).repeat(num, 1, 1)
+        return cs.to(self.device, dtype=self.text_encoder.dtype).expand(num, -1, -1) # mps-friendly
 
     def encode_prompt(self, prompt, unprompt=None, num=1, maxlen=226):
         prompt = [prompt] if isinstance(prompt, str) else prompt
@@ -234,6 +238,7 @@ class CogX:
 # slightly edited diffusers.models.embeddings.get_3d_rotary_pos_embed
 def get_3d_rot_pos_emb(embed_dim, crops_coords, h, w, time_ids, theta=10000, use_real=True): # RoPE for video tokens with 3D structure.
     # embed_dim = hidden_size_head, theta = Scaling factor for frequency computation
+    if not isinstance(time_ids, torch.Tensor): time_ids = torch.tensor(time_ids).float()
 
     def make_freq(grid, dim):
         freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
@@ -242,7 +247,7 @@ def get_3d_rot_pos_emb(embed_dim, crops_coords, h, w, time_ids, theta=10000, use
     (h0, w0), (h1, w1) = crops_coords # top-left and bottom-right coordinates of the crop
     grid_h = torch.arange(h0, h1, step = (h1-h0)/h, dtype=torch.float32)
     grid_w = torch.arange(w0, w1, step = (w1-w0)/w, dtype=torch.float32)
-    grid_t = torch.tensor(time_ids).float()
+    grid_t = time_ids
     freqs_t = make_freq(grid_t, embed_dim // 4)
     freqs_h = make_freq(grid_h, embed_dim // 8 * 3)
     freqs_w = make_freq(grid_w, embed_dim // 8 * 3)

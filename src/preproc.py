@@ -26,6 +26,11 @@ parser.add_argument('-sz', '--size', default=None, help="image size")
 parser.add_argument(  '--float', action='store_true', help='Store 16-bit float as 2x8-bit channels')
 a = parser.parse_args()
 
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
+
 if a.type=='deptha':
     from core.utils import mono16_to_dual8
     a.float = True
@@ -60,9 +65,9 @@ def deptha(img):
     if model_deptha2 is None:
         from annotator.deptha2.dpt import DepthAnythingV2
         model_deptha2 = DepthAnythingV2(encoder='vitb', features=128, out_channels=[96, 192, 384, 768])
-        model_deptha2.load_state_dict(torch.load(os.path.join(a.model_dir, 'annote', f'depth_anything_v2_vitb.pth'), map_location='cpu'))
-        model_deptha2 = model_deptha2.cuda().eval()
-    depth = model_deptha2.infer_image(img[:,:,::-1] / 255., 518, bgr=False)[None] # 518
+        model_deptha2.load_state_dict(torch.load(os.path.join(a.model_dir, 'annote', f'depth_anything_v2_vitb.pth'), weights_only=True, map_location='cpu'))
+        model_deptha2 = model_deptha2.to(device).eval()
+    depth = np.expand_dims(model_deptha2.infer_image(img[:,:,::-1] / 255., 518, bgr=False), axis=0)
     return (depth - depth.min()) / (depth.max() - depth.min()) # [0..1] [1,h,w]
 
 def fixshape(img):

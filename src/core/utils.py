@@ -2,6 +2,7 @@ import os, sys
 import numpy as np
 from PIL import Image, ImageOps
 import cv2
+import re
 import pickle
 import collections
 import math
@@ -15,7 +16,10 @@ import torch.nn.functional as F
 
 from .txt2mask import Txt2Mask
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
 
 try: # notebook/colab
     get_ipython().__class__.__name__
@@ -25,6 +29,9 @@ except: # normal console
 
 def gpu_ram():
     return torch.cuda.get_device_properties(0).total_memory // (1024*1024*1023)
+
+def clean_vram():
+    torch.cuda.empty_cache() if is_cuda else torch.mps.empty_cache() if is_mac and hasattr(torch.mps, 'empty_cache') else None
 
 def isok(*itms): # all not None, len > 0
     ok = all([x is not None for x in itms])
@@ -120,7 +127,7 @@ def triblur(x, k=3, pow=1.0):
     # padding = (k-1) // 2 # minimum padding to conv
     padding = k # let's pad more to avoid border effects
     b,c,h,w = x.shape
-    kernel = torch.linspace(-1,1,k+2)[1:-1].abs().neg().add(1).reshape(1,1,1,k).pow(pow).cuda().to(dtype=x.dtype)
+    kernel = torch.linspace(-1,1,k+2)[1:-1].abs().neg().add(1).reshape(1,1,1,k).pow(pow).to(device=device, dtype=x.dtype)
     kernel = kernel / kernel.sum()
     x = x.reshape(b*c,1,h,w)
     x = F.pad(x, (padding,padding,padding,padding), mode='reflect')
@@ -163,12 +170,15 @@ def load_img(path, size=None, tensor=True, quant=8, pad=False, gpu=True, dual8b=
         image = dual8_to_mono16(np.array(image))
     else:
         image = np.array(image).astype(np.float32) / 255.
-    image = torch.from_numpy(image[None].transpose(0,3,1,2))
+    image = torch.from_numpy(image).permute(2,0,1).unsqueeze(0)
     if gpu: image = image.to(device, dtype=torch.float16)
     return 2.*image - 1., (w,h)
 
 def save_img(image, num, out_dir, prefix='', filepath=None, ext='jpg'):
-    image = torch.clamp((image + 1.) / 2., min=0., max=1.).permute(1,2,0).cpu().numpy() * 255
+    image = torch.clamp((image + 1.) / 2., min=0., max=1.)
+    if image.device.type != 'cpu': image = image.detach().cpu()
+    if image.dtype != torch.float32: image = image.float()
+    image = image.permute(1, 2, 0).numpy() * 255
     if filepath is None: filepath = '%05d.%s' % (num, ext)
     Image.fromarray(image.astype(np.uint8)).save(os.path.join(out_dir, prefix + filepath), quality=95, subsampling=0)
 
@@ -179,13 +189,13 @@ def makemask(mask_str, image=None, invert_mask=False, threshold=0.35, tensor=Tru
     else: 
         if isinstance(image, str):
             image, _ = load_img(image, tensor=False)
-        txt2mask = Txt2Mask(model_path, device='cuda')
+        txt2mask = Txt2Mask(model_path, device=device)
         mask = txt2mask.segment(image, mask_str).to_mask(float(threshold))
         # image.putalpha(mask)
     if invert_mask: mask = ImageOps.invert(mask)
     if not tensor: return mask
     mask = np.array(mask).astype(np.float32) / 255.0
-    mask = torch.from_numpy(mask[None][None]).to(device, dtype=torch.float16)
+    mask = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0).to(device, dtype=dtype)
     return mask
 
 def unique_prefix(out_dir):

@@ -12,8 +12,14 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-import xformers
 from diffusers.models.attention_processor import Attention
+
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
+
+if not is_mac: import xformers
 
 PIL_INTERPOLATION = PIL.Image.Resampling.BICUBIC if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0") else PIL.Image.BICUBIC
 
@@ -86,30 +92,28 @@ style_templates = [
 
 class Capturer():
     def __init__(self, model='base'):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.dtype = torch.float16 if self.device == 'cuda' else torch.float32
         self.max_len = 32
+        self.device = device
 
         CAPTION_MODELS = {
             'base': 'Salesforce/blip-image-captioning-base',   # 990MB
             'large': 'Salesforce/blip-image-captioning-large', # 1.9GB
-            # 'blip2-2.7b': 'Salesforce/blip2-opt-2.7b',              # 15.5GB
             't5xl': 'Salesforce/blip2-flan-t5-xl',      # 15.77GB
         }
         model_path = CAPTION_MODELS[model]
         if model.lower() in ['t5xl']:
             from transformers import Blip2Processor, Blip2ForConditionalGeneration
-            model = Blip2ForConditionalGeneration.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16)
+            model = Blip2ForConditionalGeneration.from_pretrained(model_path, device_map="auto", torch_dtype=dtype)
             self.processor = Blip2Processor.from_pretrained(model_path)
         else:
             from transformers import AutoProcessor, BlipForConditionalGeneration
-            model = BlipForConditionalGeneration.from_pretrained(model_path, torch_dtype=self.dtype)
+            model = BlipForConditionalGeneration.from_pretrained(model_path, torch_dtype=dtype)
             self.processor = AutoProcessor.from_pretrained(model_path, do_rescale=False)
         self.model = model.eval().to(self.device)
 
     def __call__(self, image):
         if torch.is_tensor(image): image = (image + 1.) / 2.
-        inputs = self.processor(images=image, return_tensors="pt").to(self.device, dtype=self.dtype)
+        inputs = self.processor(images=image, return_tensors="pt").to(self.device, dtype=dtype)
         tokens = self.model.generate(**inputs, max_new_tokens=self.max_len)
         return self.processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
 
@@ -242,9 +246,10 @@ def custom_diff(unet, freeze_model="crossattn_kv", train=True):
                 setattr(layer, 'set_use_memory_efficient_attention_xformers', bound_method)
             else:
                 change_attn(layer)
-
-    change_attn(unet)
-    unet.set_attn_processor(CustomDiffusionAttnProcessor())
+    
+    if not is_mac: # Only use xformers if not on MPS
+        change_attn(unet)
+        unet.set_attn_processor(CustomDiffusionAttnProcessor())
     return unet
 
 def set_use_memory_efficient_attention_xformers(self, use_memory_efficient_attention_xformers, attention_op=None):
@@ -277,7 +282,8 @@ class CustomDiffusionAttnProcessor:
         value = attn.to_v(encoder_hidden_states)
         if crossattn:
             modifier = torch.ones_like(key)
-            modifier[:, :1, :] = modifier[:, :1, :]*0.
+            modifier = modifier.index_fill_(1, torch.tensor([0], device=key.device), 0.0) # MPS-friendly ?
+            # modifier[:, :1, :] = modifier[:, :1, :] * 0.
             key = modifier*key + (1-modifier)*key.detach()
             value = modifier*value + (1-modifier)*value.detach()
 
@@ -316,7 +322,8 @@ class CustomDiffusionXFormersAttnProcessor:
         value = attn.to_v(encoder_hidden_states)
         if crossattn:
             modifier = torch.ones_like(key)
-            modifier[:, :1, :] = modifier[:, :1, :]*0.
+            modifier = modifier.index_fill_(1, torch.tensor([0], device=key.device), 0.0) # MPS-friendly ?
+            # modifier[:, :1, :] = modifier[:, :1, :] * 0.
             key = modifier*key + (1-modifier)*key.detach()
             value = modifier*value + (1-modifier)*value.detach()
 
@@ -379,7 +386,7 @@ def save_delta(save_path, unet, text_encoder, mod_tokens=None, mod_tokens_id=Non
             if 'attn2.to_k' in name or 'attn2.to_v' in name:
                 delta_dict['unet'][name] = params.cpu().clone()
     if unet0 is not None: # we need original pretrained model to compress delta
-        delta_dict = compress_delta(delta_dict, unet0, compression_ratio = 0.6) # compressed delta is on cuda, uncompressed on cpu
+        delta_dict = compress_delta(delta_dict, unet0, compression_ratio = 0.6) # compressed delta is on device, uncompressed on cpu
     torch.save(delta_dict, save_path)
 
 def load_delta(st, unet, text_encoder, tokenizer, token_str=None, compress=True, freeze_model='crossattn_kv'):
@@ -425,8 +432,8 @@ def compress_delta(delta_dict, unet, compression_ratio = 0.6):
                 if explain > compression_ratio:
                     break
             compressed_st['unet'][f'{name}'] = {}
-            compressed_st['unet'][f'{name}']['u'] = (u[:, :i]@torch.diag(s)[:i, :i]).clone().cuda()
-            compressed_st['unet'][f'{name}']['v'] = vt[:i].clone().cuda()
+            compressed_st['unet'][f'{name}']['u'] = (u[:, :i]@torch.diag(s)[:i, :i]).clone().to(device)
+            compressed_st['unet'][f'{name}']['v'] = vt[:i].clone().to(device)
         else:
             compressed_st['unet'][f'{name}'] = st[name]
     return compressed_st

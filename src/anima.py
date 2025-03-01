@@ -1,7 +1,6 @@
 
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
-import math
 import numpy as np
 import imageio
 
@@ -11,10 +10,10 @@ warnings.filterwarnings("ignore")
 import torch
 import torch.nn.functional as F
 
-from core.sdsetup import SDfu, device
+from core.sdsetup import SDfu
 from core.args import main_args, samplers
-from core.text import multiprompt, txt_clean
-from core.utils import img_list, load_img, slerp, lerp, blend, framestack, basename, save_cfg, calc_size, isset
+from core.text import multiprompt
+from core.utils import img_list, load_img, framestack, basename, save_cfg, calc_size, isset
 
 def get_args(parser):
     parser.add_argument('-iv', '--in_vid',  default=None, help='input video or frame sequence (directory with images)')
@@ -34,7 +33,7 @@ def get_args(parser):
 def img_out(video):
     video = (video + 1.) / 2.
     video.clamp_(0, 1)
-    images = video.permute(1,2,3,0).unbind(dim=0) # list of [h,w,c]
+    images = video.movedim(0,-1).unbind(dim=0) # list of [h,w,c]
     images = [(image.cpu().numpy() * 255).astype("uint8") for image in images] # list of [h,w,c]
     return images
 
@@ -50,7 +49,7 @@ def main():
     if isset (a, 'in_txt'):
         csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
     else:
-        csb, cwb, texts = uc[None], torch.tensor([[1.]], device=device).half(), ['']
+        csb, cwb, texts = uc.unsqueeze(0), torch.tensor([[1.]], device=sd.device, dtype=sd.dtype), ['']
     count = len(csb)
 
     img_conds = []
@@ -71,7 +70,7 @@ def main():
             frames = imageio.mimread(a.in_vid, memtest=False)
         if isset(a, 'frames'): frames = frames[:a.frames]
         a.frames = len(frames)
-        video = torch.from_numpy(np.stack(frames)).permute(0,3,1,2).cuda().half() / 127.5 - 1. # [f,c,h,w]
+        video = torch.from_numpy(np.stack(frames)).movedim(3,1).to(sd.device, dtype=sd.dtype) / 127.5 - 1. # [f,c,h,w]
         size = list(video.shape[-2:])
     else:
         if isset(a, 'fstep') and not isset(a, 'frames'): 
@@ -122,7 +121,7 @@ def main():
             video = F.pad(video, (0, W - video.shape[-1], 0, H - video.shape[-2]), mode='reflect')
         sd.set_steps(a.steps, a.strength)
         z_ = sd.img_z(video) # [f,c,h,w]
-        z_ = z_.permute(1,0,2,3)[None,:] # [1,c,f,h,w]
+        z_ = z_.movedim(1,0).unsqueeze(0) # [1,c,f,h,w]
     else:
         sd.set_steps(a.steps, 1)
         z_ = sd.rnd_z(H, W, a.frames) # [1,c,f,h,w]

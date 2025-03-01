@@ -36,7 +36,7 @@ class ProjectReadout(nn.Module):
         self.project = nn.Sequential(nn.Linear(2 * in_features, in_features), nn.GELU())
 
     def forward(self, x):
-        readout = x[:, 0].unsqueeze(1).expand_as(x[:, self.start_index :])
+        readout = x[:, :1].expand_as(x[:, self.start_index :])
         features = torch.cat((x[:, self.start_index :], readout), -1)
 
         return self.project(features)
@@ -131,15 +131,11 @@ def forward_flex(self, x):
     x = self.patch_embed.proj(x).flatten(2).transpose(1, 2)
 
     if getattr(self, "dist_token", None) is not None:
-        cls_tokens = self.cls_token.expand(
-            B, -1, -1
-        )  # stole cls_tokens impl from Phil Wang, thanks
+        cls_tokens = self.cls_token.expand(B, -1, -1) # stole cls_tokens impl from Phil Wang, thanks
         dist_token = self.dist_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, dist_token, x), dim=1)
     else:
-        cls_tokens = self.cls_token.expand(
-            B, -1, -1
-        )  # stole cls_tokens impl from Phil Wang, thanks
+        cls_tokens = self.cls_token.expand(B, -1, -1) # stole cls_tokens impl from Phil Wang, thanks
         x = torch.cat((cls_tokens, x), dim=1)
 
     x = x + pos_embed

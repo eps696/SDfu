@@ -216,7 +216,9 @@ class PrepareForNet(object):
         pass
 
     def __call__(self, sample):
-        image = np.transpose(sample["image"], (2, 0, 1))
+        # Use np.expand_dims instead of transpose for MPS compatibility
+        image = np.expand_dims(sample["image"], 0)
+        image = np.moveaxis(image, -1, 1)[0]
         sample["image"] = np.ascontiguousarray(image).astype(np.float32)
 
         if "mask" in sample:

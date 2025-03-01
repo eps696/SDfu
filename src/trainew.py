@@ -15,8 +15,8 @@ import logging
 logging.getLogger('xformers').setLevel(logging.ERROR) # shutup triton, before torch!
 logging.getLogger('diffusers.models.modeling_utils').setLevel(logging.CRITICAL) # no bullshit about safetensors
 import warnings
-warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
-warnings.filterwarnings('ignore', category=UserWarning, message='Using the model-agnostic')
+warnings.filterwarnings('ignore', category=UserWarning, module="transformers.*")
+warnings.filterwarnings('ignore', category=FutureWarning, module="xformers.*")
 
 import torch
 import torch.nn as nn
@@ -42,7 +42,10 @@ parser.add_argument('-ups', '--upstep', default=250, type=int, help="how often t
 parser.add_argument('-b','--batch_size', default=1, type=int, help="batch size for training dataloader")
 a = parser.parse_args()
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
 
 class SDpipe(StableDiffusionPipeline):
     def __init__(self, vae, text_encoder, tokenizer, unet, scheduler, safety_checker=None, feature_extractor=None, requires_safety_checker=False):
@@ -66,7 +69,7 @@ class Coach:
     def load_model(self, a):
         if os.path.exists(a.model):
             SDload = StableDiffusionPipeline.from_single_file if os.path.isfile(a.model) else StableDiffusionPipeline.from_pretrained
-            pipe = SDload(a.model, torch_dtype=torch.float16, variant='fp16', safety_checker=None, requires_safety_checker=False)
+            pipe = SDload(a.model, torch_dtype=dtype, safety_checker=None, requires_safety_checker=False)
             pipe.to(device)
             text_encoder = pipe.text_encoder
             tokenizer    = pipe.tokenizer
@@ -82,9 +85,9 @@ class Coach:
             vae_path = os.path.join(a.maindir, subdir, 'vae')
             # load models
             text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float32).to(device)
-            tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16)
-            unet  = UNet2DConditionModel.from_pretrained(unet_path,   torch_dtype=torch.float16).to(device)
-            vae          = AutoencoderKL.from_pretrained(vae_path,    torch_dtype=torch.float16).to(device)
+            tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=dtype)
+            unet  = UNet2DConditionModel.from_pretrained(unet_path,   torch_dtype=dtype).to(device)
+            vae          = AutoencoderKL.from_pretrained(vae_path,    torch_dtype=dtype).to(device)
             scheduler    = DDIMScheduler.from_pretrained(sched_path)
             pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
         return pipe
@@ -100,8 +103,8 @@ class Coach:
         return mod_token_id
 
     def set_model_gradient_flow(self):
-        self.model.unet.to(dtype=torch.float16).requires_grad_(False)
-        self.model.vae.to(dtype=torch.float16).requires_grad_(False)
+        self.model.unet.to(dtype=dtype).requires_grad_(False)
+        self.model.vae.to(dtype=dtype).requires_grad_(False)
         self.model.text_encoder.text_model.encoder.requires_grad_(False)
         self.model.text_encoder.text_model.final_layer_norm.requires_grad_(False)
         self.model.text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
@@ -126,7 +129,7 @@ class Coach:
         else:
             question = f"What kind of {self.a.pos_terms[0]} is in this photo?"
 
-        inputs = self.captur.processor(sampled_image, question, return_tensors="pt").to("cuda", torch.float16)
+        inputs = self.captur.processor(sampled_image, question, return_tensors="pt").to(device, dtype=dtype)
         neg_out = self.captur.processor.decode(self.captur.model.generate(**inputs)[0], skip_special_tokens=True)
         if neg_out.startswith("a "): neg_out = neg_out[2:]
         return neg_out
@@ -143,7 +146,7 @@ class Coach:
 
         clip_dtype = self.model.text_encoder.dtype
         pipetest = StableDiffusionPipeline(self.model.vae, self.model.text_encoder, self.model.tokenizer, self.model.unet, self.model.scheduler, \
-                                           None, None, None, False).to(device, dtype=torch.float16)
+                                           None, None, None, False).to(device, dtype=dtype)
         pipetest.set_progress_bar_config(disable=True)
         images = []
         img = None
@@ -194,15 +197,15 @@ class Coach:
     def clip_emb_tok(self, prompt):
         tokens = self.model.tokenizer(prompt, padding="max_length", truncation=True, max_length=77, return_attention_mask=True, return_tensors="pt").to(device)
         emb = self.model.text_encoder(tokens.input_ids, attention_mask=tokens.attention_mask)[0] # [1,77,768]
-        emb = emb[torch.arange(emb.shape[0]), tokens.input_ids.eq(self.token_id).nonzero()[:1, -1]] # [1,768]
-        emb = emb / emb.norm(p=2, dim=-1, keepdim=True)
+        emb = emb[torch.arange(emb.shape[0], device=device), tokens.input_ids.eq(self.token_id).nonzero()[:1, -1]] # [1,768]
+        emb = emb / (emb.norm(p=2, dim=-1, keepdim=True) + 1e-8)
         return emb # [1,768]
 
     @torch.no_grad()
     def clip_emb_pool(self, prompt):
         tokens = self.model.tokenizer(prompt, padding="max_length", truncation=True, max_length=77, return_attention_mask=True, return_tensors="pt").to(device)
         emb = self.model.text_encoder(input_ids=tokens.input_ids, attention_mask=tokens.attention_mask, output_hidden_states=True).pooler_output
-        emb = emb / emb.norm(p=2, dim=-1, keepdim=True)
+        emb = emb / (emb.norm(p=2, dim=-1, keepdim=True) + 1e-8)
         return emb # [1,768]
 
     def train(self):
@@ -232,14 +235,15 @@ class Coach:
                     pos_prompts = [batch["template"][0].format(token=pos_word) for pos_word in self.a.pos_terms]
 
                 pos_emb = self.clip_emb_pool(pos_prompts)
-                pos_cossim = pos_emb.detach() @ txt_emb.T
+                pos_cossim = torch.matmul(pos_emb.detach(), txt_emb.T)
+                # pos_cossim = pos_emb.detach() @ txt_emb.T
 
                 # Add distances to log
                 for id_pos, pos_class in enumerate(self.a.pos_terms):
                     distances_per_cls[pos_class] = pos_cossim[id_pos].mean().item()
 
                 # Restrict max cosine sim to optimize
-                pos_cossim = torch.min(pos_cossim, torch.ones_like(pos_cossim) * self.a.max_cos)
+                pos_cossim = torch.minimum(pos_cossim, torch.ones_like(pos_cossim) * self.a.max_cos)
 
                 # Calc positive loss
                 pos_loss: torch.Tensor = 0
@@ -252,14 +256,15 @@ class Coach:
                 if len(neg_prompts) > 0:
                     # Calc distances to negative classes
                     neg_emb = self.clip_emb_pool(neg_prompts)
-                    neg_cossim = neg_emb.detach() @ txt_emb.T
+                    neg_cossim = torch.matmul(neg_emb.detach(), txt_emb.T)
+                    # neg_cossim = neg_emb.detach() @ txt_emb.T
 
                     # Add distances to log
                     for id_neg, neg_class in enumerate(self.a.neg_terms):
                         distances_per_cls[neg_class] = neg_cossim[id_neg].mean().item()
 
                     # Restrict min cosine sim to optimize
-                    neg_cossim = torch.max(neg_cossim, torch.ones_like(neg_cossim) * self.a.min_cos)
+                    neg_cossim = torch.maximum(neg_cossim, torch.ones_like(neg_cossim) * self.a.min_cos)
 
                     mean_neg_cosine = neg_cossim.mean()
                     max_neg_cosine, neg_max_ind = neg_cossim.mean(dim=1).max(dim=0)

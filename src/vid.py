@@ -63,7 +63,8 @@ def main():
             if a.cguide: # use noise lerp with cfg scaling (slower)
                 video = sd.generate(z_, cs, uc, cws=cws)
             else: # use cond lerp (worse for multi inputs)
-                c_ = sum([cws[j] * cs[j] for j in range(len(cs))]).unsqueeze(0)
+                c_ = sum([cws[j] * cs[j] for j in range(len(cs))])
+                c_ = c_.unsqueeze(0).expand(z_.size(0), -1, -1) # MPS-friendly expand
                 video = sd.generate(z_, c_, uc)
             return video
 
@@ -72,11 +73,11 @@ def main():
         pbar = progbar(count)
         for i in range(count):
             if len(videoin) > 0:
-                video = videoin[i % len(videoin)].cuda()
+                video = videoin[i % len(videoin)].to(sd.device)
                 video = F.interpolate(video, (H, W), mode='bicubic', align_corners=True)
                 sd.set_steps(a.steps, a.strength)
                 z_ = sd.img_z(video) # [f,c,h,w]
-                z_ = z_.permute(1,0,2,3)[None,:] # [1,c,f,h,w]
+                z_ = z_.permute(1,0,2,3).unsqueeze(0) # [1,c,f,h,w]
             else:
                 sd.set_steps(a.steps, 1)
                 z_ = sd.rnd_z(H, W, a.frames) # [1,c,f,h,w]

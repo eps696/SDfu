@@ -11,13 +11,12 @@ from torchvision import transforms
 from . import util
 from .model import bodypose_model
 
+device = 'mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu'
+
 class Body(object):
     def __init__(self, model_path):
-        self.model = bodypose_model()
-        if torch.cuda.is_available():
-            self.model = self.model.cuda()
-            print('cuda')
-        model_dict = util.transfer(self.model, torch.load(model_path))
+        self.model = bodypose_model().to(device)
+        model_dict = util.transfer(self.model, torch.load(model_path, weights_only=True))
         self.model.load_state_dict(model_dict)
         self.model.eval()
 
@@ -37,12 +36,10 @@ class Body(object):
             scale = multiplier[m]
             imageToTest = cv2.resize(oriImg, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
             imageToTest_padded, pad = util.padRightDownCorner(imageToTest, stride, padValue)
-            im = np.transpose(np.float32(imageToTest_padded[:, :, :, np.newaxis]), (3, 2, 0, 1)) / 256 - 0.5
+            im = np.transpose(np.float32(imageToTest_padded), (2, 0, 1))[np.newaxis, :, :, :] / 256 - 0.5
             im = np.ascontiguousarray(im)
 
-            data = torch.from_numpy(im).float()
-            if torch.cuda.is_available():
-                data = data.cuda()
+            data = torch.from_numpy(im).float().to(device)
             # data = data.permute([2, 0, 1]).unsqueeze(0).float()
             with torch.no_grad():
                 Mconv7_stage6_L1, Mconv7_stage6_L2 = self.model(data)

@@ -14,7 +14,8 @@ import logging
 logging.getLogger('xformers').setLevel(logging.ERROR)
 logging.getLogger('diffusers.models.modeling_utils').setLevel(logging.CRITICAL)
 import warnings
-warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
+warnings.filterwarnings('ignore', category=UserWarning, module="transformers.*")
+warnings.filterwarnings('ignore', category=FutureWarning, module="xformers.*")
 
 import torch
 import torch.nn.functional as F
@@ -61,11 +62,14 @@ parser.add_argument('--scale_lr',       default=True, help="Scale learning rate 
 parser.add_argument('-S',  '--seed',    default=None, type=int, help="A seed for reproducible training.")
 a = parser.parse_args()
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
 
 if not isset(a, 'seed'): 
     a.seed = int((time.time()%1)*69696)
-g_ = torch.Generator("cuda").manual_seed(a.seed)
+g_ = torch.Generator(device).manual_seed(a.seed)
 
 if a.style or a.aug_img:
     a.aug_txt = True
@@ -82,7 +86,7 @@ def main():
 
     if os.path.exists(a.model):
         SDload = StableDiffusionPipeline.from_single_file if os.path.isfile(a.model) else StableDiffusionPipeline.from_pretrained
-        pipe = SDload(a.model, torch_dtype=torch.float16, variant='fp16', safety_checker=None, requires_safety_checker=False)
+        pipe = SDload(a.model, torch_dtype=dtype, safety_checker=None, requires_safety_checker=False)
         pipe.to(device)
         text_encoder = pipe.text_encoder
         tokenizer    = pipe.tokenizer
@@ -97,17 +101,17 @@ def main():
         unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
         vae_path = os.path.join(a.maindir, subdir, 'vae')
         # load models
-        text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16).to(device)
-        tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16)
-        unet  = UNet2DConditionModel.from_pretrained(unet_path,   torch_dtype=torch.float16).to(device)
-        vae          = AutoencoderKL.from_pretrained(vae_path,    torch_dtype=torch.float16).to(device)
+        text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=dtype).to(device)
+        tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=dtype)
+        unet  = UNet2DConditionModel.from_pretrained(unet_path,   torch_dtype=dtype).to(device)
+        vae          = AutoencoderKL.from_pretrained(vae_path,    torch_dtype=dtype).to(device)
         scheduler    = DDIMScheduler.from_pretrained(sched_path)
         pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler)
 
     resolution = unet.config.sample_size * 2 ** (len(vae.config.block_out_channels) - 1)
 
     if a.type=='custom' and a.load_custom is not None:
-        _ = load_delta(torch.load(a.load_custom), unet, text_encoder, tokenizer, freeze_model=a.freeze_model)
+        _ = load_delta(torch.load(a.load_custom, weights_only=True), unet, text_encoder, tokenizer, freeze_model=a.freeze_model)
     elif a.type=='lora' and a.load_lora is not None:
         _ = pipe.load_lora_weights(a.load_lora)
 
@@ -158,7 +162,7 @@ def main():
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=a.batch_size, shuffle=True, collate_fn=collate_fn)
 
     # cast modules :: inference = fp16 freezed, training = fp32 with grad
-    weight_dtype = torch.float16 # torch.float16 torch.bfloat16
+    weight_dtype = dtype # torch.float16 torch.bfloat16
     vae.to(dtype=weight_dtype).requires_grad_(False)
     if train_txtenc:
         text_encoder.text_model.encoder.requires_grad_(False)
@@ -178,7 +182,7 @@ def main():
     elif a.type == 'custom':
         unet = custom_diff(unet, a.freeze_model)
         unet_dtype = torch.float32 # !!! must be trained as float32; otherwise inf/nan
-        unet0 = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16) # required to compress delta
+        unet0 = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=weight_dtype) # required to compress delta
     unet.to(dtype=unet_dtype)
     text_encoder.to(dtype=torch.float32) # !!! must be trained as float32 + avoiding q/k/v mistype error at lora validation
 
@@ -271,7 +275,7 @@ def main():
                 if a.validate:
                     pipetest = StableDiffusionPipeline(vae, text_encoder, tokenizer, unet, scheduler, None, None, None, False).to(device)
                     pipetest.set_progress_bar_config(disable=True)
-                    with torch.autocast("cuda"):
+                    with torch.autocast(device):
                         if train_txtenc:
                             for i, (mod_token, init_token) in enumerate(zip(mod_tokens, init_tokens)):
                                 prompt = 'photo of %s %s' % (mod_token, init_token)

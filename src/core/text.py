@@ -3,7 +3,9 @@ import re
 
 import torch
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
 
 re_attention = re.compile(
     r"""
@@ -115,9 +117,9 @@ def encode_tokens(pipe, prompt):
 
     # assign weights to the prompts and normalize in the sense of mean
     previous_mean = embedding.float().mean(axis=[-2, -1]).to(embedding.dtype)
-    embedding *= weights.unsqueeze(-1)
-    current_mean  = embedding.float().mean(axis=[-2, -1]).to(embedding.dtype)
-    embedding *= (previous_mean / current_mean).unsqueeze(-1).unsqueeze(-1)
+    embedding *= weights.unsqueeze(-1).repeat_interleave(embedding.shape[-1], dim=-1) # MPS-friendly ?
+    current_mean = embedding.float().mean(axis=[-2, -1]).to(embedding.dtype)
+    embedding *= (previous_mean / current_mean).unsqueeze(-1).unsqueeze(-1).repeat_interleave(embedding.shape[-1], dim=-1) # MPS-friendly ?
 
     return embedding
 
@@ -165,7 +167,8 @@ def multiprompt(pipe, in_txt, pretxt='', postxt='', repeat=1):
         embeds += [embatch]
         wts = torch.Tensor(prompt[1])
         weights += [wts] # or [wts / wts.sum()] ?
-    embeds  = torch.stack(embeds).repeat(repeat,1,1,1) # [num,b,77,768]
-    weights = torch.stack(weights).repeat(repeat,1).to(embeds.device, dtype=embeds.dtype) # [num,b]
+    # MPS-friendly expand using repeat_interleave with explicit tensor copy
+    embeds = torch.stack(embeds).repeat_interleave(repeat, dim=0)
+    weights = torch.stack(weights).repeat_interleave(repeat, dim=0).to(embeds.device, dtype=embeds.dtype)
     return embeds, weights, texts
 

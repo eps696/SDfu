@@ -135,9 +135,7 @@ def resize_image(img):
 
     img_resized = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
 
-    img_resized = (
-        torch.from_numpy(np.transpose(img_resized, (2, 0, 1))).contiguous().float()
-    )
+    img_resized = torch.from_numpy(np.transpose(img_resized, (2, 0, 1))).contiguous().float()
     img_resized = img_resized.unsqueeze(0)
 
     return img_resized
@@ -154,12 +152,8 @@ def resize_depth(depth, width, height):
     Returns:
         array: processed depth
     """
-    depth = torch.squeeze(depth[0, :, :, :]).to("cpu")
-
-    depth_resized = cv2.resize(
-        depth.numpy(), (width, height), interpolation=cv2.INTER_CUBIC
-    )
-
+    depth = torch.squeeze(depth[0, :, :, :]).contiguous().to("cpu")
+    depth_resized = cv2.resize(depth.numpy(), (width, height), interpolation=cv2.INTER_CUBIC)
     return depth_resized
 
 def write_depth(path, depth, bits=1):

@@ -4,7 +4,7 @@ os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
 
 import torch
 
-from core.sdsetup import SDfu, device
+from core.sdsetup import SDfu
 from core.args import main_args, samplers
 from core.text import read_txt, multiprompt
 from core.utils import load_img, save_img, calc_size, isok, isset, img_list, basename, progbar, save_cfg
@@ -36,7 +36,7 @@ def main():
     if isset (a, 'in_txt'):
         csb, cwb, texts = multiprompt(sd, a.in_txt, a.pretxt, a.postxt, a.num) # [num,b,77,768], [num,b], [..]
     else:
-        csb, cwb, texts = uc[None], torch.tensor([[1.]], device=device).half(), ['']
+        csb, cwb, texts = uc.unsqueeze(0), torch.tensor([[1.]], device=sd.device, dtype=sd.dtype), ['']
     count = len(csb)
 
     img_conds = []

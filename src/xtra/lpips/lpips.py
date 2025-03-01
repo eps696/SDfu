@@ -72,7 +72,7 @@ class LPIPS(nn.Module):
 
                 if(verbose):
                     print('Loading model from: %s'%model_path)
-                self.load_state_dict(torch.load(model_path, map_location='cpu'), strict=False)          
+                self.load_state_dict(torch.load(model_path, weights_only=True, map_location='cpu'), strict=False)          
 
         if(eval_mode):
             self.eval()
@@ -125,8 +125,10 @@ class LPIPS(nn.Module):
 class ScalingLayer(nn.Module):
     def __init__(self):
         super(ScalingLayer, self).__init__()
-        self.register_buffer('shift', torch.Tensor([-.030,-.088,-.188])[None,:,None,None])
-        self.register_buffer('scale', torch.Tensor([.458,.448,.450])[None,:,None,None])
+        self.register_buffer('shift', torch.tensor([-.030,-.088,-.188]).reshape(1,3,1,1))
+        self.register_buffer('scale', torch.tensor([.458,.448,.450]).reshape(1,3,1,1))
+        # self.register_buffer('shift', torch.Tensor([-.030,-.088,-.188])[None,:,None,None])
+        # self.register_buffer('scale', torch.Tensor([.458,.448,.450])[None,:,None,None])
 
     def forward(self, inp):
         return (inp - self.shift) / self.scale
@@ -186,12 +188,12 @@ class L2(FakeNet):
 
         if(self.colorspace=='RGB'):
             (N,C,X,Y) = in0.size()
-            value = torch.mean(torch.mean(torch.mean((in0-in1)**2,dim=1).view(N,1,X,Y),dim=2).view(N,1,1,Y),dim=3).view(N)
+            value = torch.mean(torch.mean(torch.mean((in0-in1)**2,dim=1).reshape(N,1,X,Y),dim=2).reshape(N,1,1,Y),dim=3).reshape(N)
             return value
         elif(self.colorspace=='Lab'):
             value = lpips.l2(lpips.tensor2np(lpips.tensor2tensorlab(in0.data,to_norm=False)), 
                 lpips.tensor2np(lpips.tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
-            ret_var = Variable( torch.Tensor((value,) ) )
+            ret_var = Variable(torch.tensor((value,)))
             if(self.use_gpu):
                 ret_var = ret_var.cuda()
             return ret_var
@@ -206,7 +208,7 @@ class DSSIM(FakeNet):
         elif(self.colorspace=='Lab'):
             value = lpips.dssim(lpips.tensor2np(lpips.tensor2tensorlab(in0.data,to_norm=False)), 
                 lpips.tensor2np(lpips.tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
-        ret_var = Variable( torch.Tensor((value,) ) )
+        ret_var = Variable(torch.tensor((value,)))
         if(self.use_gpu):
             ret_var = ret_var.cuda()
         return ret_var

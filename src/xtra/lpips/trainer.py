@@ -11,6 +11,7 @@ from tqdm import tqdm
 import lpips
 import os
 
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 class Trainer():
     def name(self):
@@ -73,10 +74,11 @@ class Trainer():
             self.net.eval()
 
         if(use_gpu):
-            self.net.to(gpu_ids[0])
-            self.net = torch.nn.DataParallel(self.net, device_ids=gpu_ids)
+            self.net.to(device)
+            if len(gpu_ids) > 1 and device.type == "cuda":
+                self.net = torch.nn.DataParallel(self.net, device_ids=gpu_ids)
             if(self.is_train):
-                self.rankLoss = self.rankLoss.to(device=gpu_ids[0]) # just put this on GPU0
+                self.rankLoss = self.rankLoss.to(device=device)
 
         if(printNet):
             print('---------- Networks initialized -------------')
@@ -113,10 +115,10 @@ class Trainer():
         self.input_judge = data['judge']
 
         if(self.use_gpu):
-            self.input_ref = self.input_ref.to(device=self.gpu_ids[0])
-            self.input_p0 = self.input_p0.to(device=self.gpu_ids[0])
-            self.input_p1 = self.input_p1.to(device=self.gpu_ids[0])
-            self.input_judge = self.input_judge.to(device=self.gpu_ids[0])
+            self.input_ref = self.input_ref.to(device)
+            self.input_p0 = self.input_p0.to(device) 
+            self.input_p1 = self.input_p1.to(device)
+            self.input_judge = self.input_judge.to(device)
 
         self.var_ref = Variable(self.input_ref,requires_grad=True)
         self.var_p0 = Variable(self.input_p0,requires_grad=True)
@@ -127,7 +129,7 @@ class Trainer():
         self.d1 = self.forward(self.var_ref, self.var_p1)
         self.acc_r = self.compute_accuracy(self.d0,self.d1,self.input_judge)
 
-        self.var_judge = Variable(1.*self.input_judge).view(self.d0.size())
+        self.var_judge = Variable(1.*self.input_judge).reshape(self.d0.size())
 
         self.loss_total = self.rankLoss.forward(self.d0, self.d1, self.var_judge*2.-1.)
 
@@ -168,7 +170,7 @@ class Trainer():
 
     def save(self, path, label):
         if(self.use_gpu):
-            self.save_network(self.net.module, path, '', label)
+            self.save_network(self.net.module if hasattr(self.net, 'module') else self.net, path, '', label)
         else:
             self.save_network(self.net, path, '', label)
         self.save_network(self.rankLoss.net, path, 'rank', label)
@@ -184,7 +186,7 @@ class Trainer():
         save_filename = '%s_net_%s.pth' % (epoch_label, network_label)
         save_path = os.path.join(self.save_dir, save_filename)
         print('Loading network from %s'%save_path)
-        network.load_state_dict(torch.load(save_path))
+        network.load_state_dict(torch.load(save_path, weights_only=True))
 
     def update_learning_rate(self,nepoch_decay):
         lrd = self.lr / nepoch_decay

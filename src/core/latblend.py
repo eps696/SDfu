@@ -46,7 +46,7 @@ class LatentBlending():
                 thus high values can give rough transitions. Values around 2 should be fine.
         """
         self.sd = sd
-        self.device = torch.device('cuda')
+        self.device = self.sd.device
         self.set_steps(steps, strength)
 
         self.seed1 = int((time.time()%1)*69696)
@@ -80,7 +80,7 @@ class LatentBlending():
         self.verbose = verbose
 
         self.dt_per_diff = 0
-        self.lpips = lpips.LPIPS(net='alex', verbose=False).cuda()
+        self.lpips = lpips.LPIPS(net='alex', verbose=False).to(self.device)
         self.slerp = slerp2 if self.sd.use_kdiff or self.isxl else slerp
 
     def set_steps(self, steps, strength):
@@ -410,7 +410,7 @@ class LatentBlending():
                     mix = 0.
                     bs = len(cond) + 1
                     cond_in = torch.cat([self.uc, cond])
-                lat_in = torch.cat([lat_in] * bs)
+                lat_in = torch.cat([lat_in] * bs, dim=0)
                 if self.sd.use_cnet and self.cnimg is not None: # controlnet
                     ctl_downs, ctl_mid = self.sd.cnet(lat_in, t, cond_in, self.cnimg, self.sd.cnet_ws, return_dict=False)
                     ukwargs = {'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid, **ukwargs}
@@ -426,12 +426,12 @@ class LatentBlending():
 
     def xl_step(self, lat, cond, pool_c, im_cond, t, verbose=True):
         with self.run_scope("cuda"):
-            lat_in = self.sd.scheduler.scale_model_input(lat.cuda(), t) # scaling only k-samplers
+            lat_in = self.sd.scheduler.scale_model_input(lat.to(self.device), t) # scaling only k-samplers
             if not self.cfg_scale in [0,1]:
                 cond = torch.cat([self.uc, cond])
                 pool_c = torch.cat([self.pool_uc, pool_c])
-                lat_in = torch.cat([lat_in] * 2)
-            if len(lat_in) > len(self.time_ids): self.time_ids = torch.cat([self.time_ids] * 2)
+                lat_in = torch.cat([lat_in] * 2, dim=0)
+            if len(lat_in) > len(self.time_ids): self.time_ids = torch.cat([self.time_ids] * 2, dim=0)
 
             ukwargs = {'added_cond_kwargs': {"text_embeds": pool_c, "time_ids": self.time_ids}}
             if self.sd.use_cnet and self.cnimg is not None: # controlnet
@@ -447,7 +447,7 @@ class LatentBlending():
             else:
                 noise_un, noise_c = self.sd.unet(lat_in, t, cond, **ukwargs).sample.chunk(2)
                 noise_pred = noise_un + self.cfg_scale * (noise_c - noise_un)
-            lat = self.sd.scheduler.step(noise_pred, t, lat).prev_sample.cuda().half()
+            lat = self.sd.scheduler.step(noise_pred, t, lat).prev_sample.to(self.device, dtype=self.sd.dtype)
 
         return lat
 

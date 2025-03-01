@@ -164,6 +164,10 @@ class MiDaSInference(nn.Module):
 
     def forward(self, x):
         with torch.no_grad():
-            prediction = self.model(x)
+            if x.device.type == 'mps':
+                # Handle tensor expansion in MPS-friendly way
+                prediction = self.model(x.contiguous())
+            else:
+                prediction = self.model(x)
         return prediction
 

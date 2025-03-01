@@ -83,7 +83,8 @@ class VITDenseBase(nn.Module):
         # compute conditional from a single string
         if conditional is not None and type(conditional) == str:
             cond = self.compute_conditional(conditional)
-            cond = cond.repeat(batch_size, 1)
+            # Use expand instead of repeat for MPS compatibility
+            cond = cond.expand(batch_size, -1)
 
         # compute conditional from string list/tuple
         elif conditional is not None and type(conditional) in {list, tuple} and type(conditional[0]) == str:
@@ -212,7 +213,7 @@ class VITDensePredT(VITDenseBase):
 
             elif process_cond.endswith('.pth'):
                 
-                shift = torch.load(process_cond)
+                shift = torch.load(process_cond, weights_only=True)
                 def add_shift(x):
                     return x + shift.to(x.device)
 

@@ -46,7 +46,7 @@ def cond_mix(a, csb, cwb, i, tt=0):
             cs  = torch.cat([cs, cs2])
             cws = [1.- tt, tt]
     else: # only cond lerp (incoherent for multi inputs)
-        cwb = cwb[:, :, None, None]
+        cwb = cwb.unsqueeze(-1).unsqueeze(-1)
         cs = lerp(csb[i % len(csb)] * cwb[i % len(cwb)], csb[(i+1) % len(csb)] * cwb[(i+1) % len(cwb)], tt).sum(0, keepdims=True)
         cws = [1.]
     return cs, cws

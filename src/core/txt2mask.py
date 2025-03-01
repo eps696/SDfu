@@ -79,7 +79,7 @@ class Txt2Mask(object):
         self.model.eval()
         # initially we keep everything in cpu to conserve space
         self.model.to('cpu')
-        self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')), strict=False)
+        self.model.load_state_dict(torch.load(model_path, weights_only=True, map_location=torch.device('cpu')), strict=False)
 
     @torch.no_grad()
     def segment(self, image, prompt:str) -> SegmentedGrayscale:
@@ -104,7 +104,8 @@ class Txt2Mask(object):
         img = self._scale_and_crop(image)
         img = transform(img).unsqueeze(0)
 
-        preds = self.model(img.repeat(len(prompts),1,1,1), prompts)[0]
+        preds = self.model(img.detach().clone().repeat_interleave(len(prompts), dim=0), prompts)[0] # MPS-friendly 
+        # preds = self.model(img.repeat(len(prompts),1,1,1), prompts)[0]
         heatmap = torch.sigmoid(preds[0][0]).cpu()
         self._to_device('cpu')
         return SegmentedGrayscale(image, heatmap)

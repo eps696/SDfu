@@ -13,10 +13,13 @@ from diffusers import DDIMScheduler
 
 from core.sdsetup import SDfu
 from core.args import main_args
-from core.utils import load_img, isset, img_list, file_list, save_cfg, basename, progbar
+from core.utils import load_img, isset, img_list, file_list, save_cfg, basename, clean_vram, progbar
 from core.tokenflow_utils import reg_var, get_var, reg_time, reg_extended_attention_pnp, reg_conv_injection, set_tokenflow, reg_extended_attention
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
 
 def get_args(parser):
     parser.add_argument(       '--edit_type', default='pnp', choices=['pnp', 'sde'])
@@ -60,7 +63,7 @@ def ddim_inversion(sd, x, cond, batch, cnet_conds=None, ts_to_save=None, save_di
         pbar_b = progbar(int(math.ceil(len(x) / batch)))
         for b in range(0, len(x), batch):
             x_batch = x[b : b+batch]
-            cond_batch = cond.repeat(len(x_batch), 1, 1)
+            cond_batch = cond.expand(len(x_batch), -1, -1)
             if sd.use_cnet:
                 eps = cnet_pred(sd.unet, sd.cnet, x_batch, t, cond_batch, torch.cat([cnet_conds[b : b+batch]]))
             else:
@@ -90,7 +93,7 @@ def ddim_sample(sd, x, cond, batch, cnet_conds=None):
         pbar_b = progbar(int(math.ceil(len(x) / batch)))
         for b in range(0, len(x), batch):
             x_batch = x[b : b+batch]
-            cond_batch = cond.repeat(len(x_batch), 1, 1)
+            cond_batch = cond.expand(len(x_batch), -1, -1)
             if sd.use_cnet:
                 eps = cnet_pred(sd.unet, sd.cnet, x_batch, t, cond_batch, torch.cat([cnet_conds[b : b+batch]]))
             else:
@@ -168,7 +171,7 @@ class TokenFlow(nn.Module):
 
         pbar_t = progbar(len(self.scheduler.timesteps))
         for t in self.scheduler.timesteps:
-            saved_lats = torch.load(os.path.join(self.lat_dir, 'noisy_lats-%04d.pt' % t)) # [f,4,h,w]
+            saved_lats = torch.load(os.path.join(self.lat_dir, 'noisy_lats-%04d.pt' % t), weights_only=True) # [f,4,h,w]
 
             pivot_ids = torch.randint(self.bs, (pnum,)) + torch.arange(0, mx, self.bs)
             dvx = (mx // self.bs) * self.bs
@@ -200,15 +203,15 @@ class TokenFlow(nn.Module):
                 lnum = len(pivot_hs_list) // bnum # count of layers for one pass = 16
                 pivot_hs = [torch.cat([pivot_hs_list[b * lnum + l] for b in range(bnum)], dim=1) for l in range(lnum)]
                 attns = [torch.cat([attn_list[b * lnum + l] for b in range(bnum)], dim=1) for l in range(lnum)]
-                del pivot_hs_list, attn_list; torch.cuda.empty_cache() # clean vram
+                del pivot_hs_list, attn_list; clean_vram()
                 if oncpu:
-                    reg_var(self, 'pivot_hidden_states', [x.cuda() for x in pivot_hs])
-                    reg_var(self, 'attn_outs', [x.cuda() for x in attns])
+                    reg_var(self, 'pivot_hidden_states', [x.to(device) for x in pivot_hs])
+                    reg_var(self, 'attn_outs', [x.to(device) for x in attns])
                 else:
                     reg_var(self, 'pivot_hidden_states', pivot_hs)
                     reg_var(self, 'attn_outs', attns)
                 reg_var(self, 'layer_idx', [0])
-                del pivot_hs, attns; torch.cuda.empty_cache() # clean vram
+                del pivot_hs, attns; clean_vram()
             else:
                 self.denoise_step(lats[pivot_ids], t, saved_lats[pivot_ids], self.cnet_conds[pivot_ids]) # NO BATCH
             reg_var(self, 'pivotal_pass', False)
@@ -268,7 +271,7 @@ def edit(sd, lats, cnet_conds, a):
     # get noise
     last_lat_path = file_list(a.lat_dir, ext='pt')[-1]
     last_lat_step = int(basename(last_lat_path).split('-')[-1])
-    noisy_lats = torch.load(last_lat_path)[range(len(lats))].to(device)
+    noisy_lats = torch.load(last_lat_path, weights_only=True)[range(len(lats))].to(device)
     alpha_prod_T = sd.scheduler.alphas_cumprod[last_lat_step]
     mu_T, sigma_T = alpha_prod_T ** 0.5, (1 - alpha_prod_T) ** 0.5
     ddim_eps = (noisy_lats - mu_T * lats) / sigma_T
@@ -284,7 +287,7 @@ def edit(sd, lats, cnet_conds, a):
     noisy_lats = sd.scheduler.add_noise(lats, ddim_eps, sd.scheduler.timesteps[0])
     edited_lats = editor.sample_loop(noisy_lats, a.batch_pivot, a.cpu)
     print(' decoding..')
-    torch.cuda.empty_cache()
+    clean_vram()
     decode_images(sd, edited_lats, os.path.join(a.out_dir, 'out'))
 
 @torch.no_grad()

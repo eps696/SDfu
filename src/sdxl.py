@@ -31,7 +31,10 @@ un = "low quality, worst quality, poorly drawn, pixelated, oversaturated, [[colo
 def unprompt(una):
     return un if una is None else '' if una=='no' else una if una[-1]=='.' else un + una if una[0]==',' else ', '.join([una, un])
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
 
 def get_args(parser):
     parser.add_argument('-mdir', '--models_dir', default='models/xl')
@@ -140,11 +143,11 @@ class SDfu:
             if os.path.exists(os.path.join(a.models_dir, 'image')):
                 self.image_preproc = CLIPImageProcessor.from_pretrained(os.path.join(a.models_dir, 'image/preproc_config.json'))
                 self.image_encoder = CLIPimg.from_pretrained(os.path.join(a.models_dir, 'image'), torch_dtype=torch.float16).to(device)
-                self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.models_dir, 'image/ipa-xl.bin'), map_location="cpu"))
+                self.unet._load_ip_adapter_weights(torch.load(os.path.join(a.models_dir, 'image/ipa-xl.bin'), weights_only=True, map_location="cpu"))
             else:
                 self.image_preproc = CLIPImageProcessor.from_pretrained('runwayml/stable-diffusion-v1-5', subfolder='feature_extractor')
                 self.image_encoder = CLIPimg.from_pretrained('h94/IP-Adapter', subfolder='sdxl_models/image_encoder', torch_dtype=torch.float16).to(device)
-                self.unet._load_ip_adapter_weights(torch.load(hf_hub_download('h94/IP-Adapter', 'sdxl_models/ip-adapter_sdxl.bin'), map_location="cpu"))
+                self.unet._load_ip_adapter_weights(torch.load(hf_hub_download('h94/IP-Adapter', 'sdxl_models/ip-adapter_sdxl.bin'), weights_only=True, map_location="cpu"))
                 
             self.pipe.register_modules(image_encoder = self.image_encoder)
             self.pipe.set_ip_adapter_scale(float(a.imgref_weight))
@@ -186,13 +189,13 @@ class SDfu:
 
     def setseed(self, seed=None):
         self.seed = seed or int((time.time()%1)*69696)
-        self.g_ = torch.Generator("cuda").manual_seed(self.seed)
+        self.g_ = torch.Generator(device).manual_seed(self.seed)
     
     def set_steps(self, steps, strength=1., device=device):
         self.scheduler.set_timesteps(steps, device=device)
         steps = min(int(steps * strength), steps)
         self.timesteps = self.scheduler.timesteps[-steps:]
-        self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
+        self.lat_timestep = self.timesteps[:1].expand(self.a.batch, -1) # MPS-friendly expand
 
     def encode_prompt(self, prompt, prompt2=None, unprompt=None, unprompt2=None, do_cfg=True, num=1):
         tokenizers = [self.tokenizer, self.tokenizer_2] if self.tokenizer is not None else [self.tokenizer_2]
@@ -208,8 +211,8 @@ class SDfu:
             pool_c = c_[0]
             cs.append(c_.hidden_states[-2])
         cs = torch.concat(cs, dim=-1)
-        cs = cs.repeat(num,1,1).to(device, dtype = self.unet.dtype if self.text_encoder_2 is None else self.text_encoder_2.dtype)
-        pool_c = pool_c.repeat(num,1)
+        cs = cs.expand(num,-1,-1).to(device, dtype = self.unet.dtype if self.text_encoder_2 is None else self.text_encoder_2.dtype) # MPS-friendly
+        pool_c = pool_c.expand(num,-1) # MPS-friendly expand
         uc      = torch.zeros_like(cs)     if do_cfg else None
         pool_uc = torch.zeros_like(pool_c) if do_cfg else None
         return cs, uc, pool_c, pool_uc
@@ -394,7 +397,7 @@ def main():
                 frames = imageio.mimread(a.in_vid, memtest=False)
             if isset(a, 'frames'): frames = frames[:a.frames]
             a.frames = len(frames)
-            video = torch.from_numpy(np.stack(frames)).cuda().half().permute(0,3,1,2) / 127.5 - 1. # [f,c,h,w]
+            video = torch.from_numpy(np.stack(frames)).to(device, dtype=dtype).permute(0,3,1,2) / 127.5 - 1. # [f,c,h,w]
             size = list(video.shape[-2:])
         else:
             if isset(a, 'fstep') and a.fstep > 1 and not isset(a, 'frames'): 

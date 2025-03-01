@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import functional as nnf
 from torch.nn.modules.activation import ReLU
 
+device = 'mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def precompute_clip_vectors():
 
@@ -16,12 +17,12 @@ def precompute_clip_vectors():
 
     import clip
     from clipseg_models.clip_prompts import imagenet_templates
-    clip_model = clip.load("ViT-B/32", device='cuda', jit=False)[0]
+    clip_model = clip.load("ViT-B/32", device=device, jit=False)[0]
     prompt_vectors = {}
     for name in all_names[:100]:
         with torch.no_grad():
             conditionals = [t.format(name).replace('_', ' ') for t in imagenet_templates]
-            text_tokens = clip.tokenize(conditionals).cuda()
+            text_tokens = clip.tokenize(conditionals).to(device)
             cond = clip_model.encode_text(text_tokens).cpu()
             
             for cond, vec in zip(conditionals, cond):
@@ -168,7 +169,7 @@ class CLIPDenseBase(nn.Module):
             x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
             x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
 
-            x = torch.cat([self.model.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+            x = torch.cat([self.model.class_embedding.to(x.dtype).unsqueeze(0).expand(x.shape[0], -1, -1), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
 
             standard_n_tokens = 50 if self.model.conv1.kernel_size[0] == 32 else 197
 
@@ -325,9 +326,9 @@ class CLIPDensePredT(CLIPDenseBase):
         self.token_shape = {'ViT-B/32': (7, 7), 'ViT-B/16': (14, 14)}[version]
 
         if fix_shift:
-            # self.shift_vector = nn.Parameter(torch.load(join(dirname(basename(__file__)), 'clip_text_shift_vector.pth')), requires_grad=False)
-            self.shift_vector = nn.Parameter(torch.load(join(dirname(basename(__file__)), 'shift_text_to_vis.pth')), requires_grad=False)
-            # self.shift_vector = nn.Parameter(-1*torch.load(join(dirname(basename(__file__)), 'shift2.pth')), requires_grad=False)
+            # self.shift_vector = nn.Parameter(torch.load(join(dirname(basename(__file__)), 'clip_text_shift_vector.pth'), weights_only=True), requires_grad=False)
+            self.shift_vector = nn.Parameter(torch.load(join(dirname(basename(__file__)), 'shift_text_to_vis.pth'), weights_only=True), requires_grad=False)
+            # self.shift_vector = nn.Parameter(-1*torch.load(join(dirname(basename(__file__)), 'shift2.pth'), weights_only=True), requires_grad=False)
         else:
             self.shift_vector = None
 
@@ -418,7 +419,7 @@ class CLIPDensePredT(CLIPDenseBase):
 
         size = int(math.sqrt(a.shape[2]))
 
-        a = a.view(bs, a.shape[1], size, size)
+        a = a.reshape(bs, a.shape[1], size, size)
 
         a = self.trans_conv(a)
 
@@ -519,7 +520,7 @@ class CLIPDenseBaseline(CLIPDenseBase):
 
         size = int(math.sqrt(a.shape[2]))
 
-        a = a.view(bs, a.shape[1], size, size)
+        a = a.reshape(bs, a.shape[1], size, size)
         a = self.trans_conv(a)
 
         if return_features:
@@ -564,4 +565,3 @@ class CLIPSegMultiLabel(nn.Module):
         return out
 
         # construct output tensor
-                    

@@ -32,6 +32,11 @@ def get_args(parser):
     parser.add_argument('-b',  '--batch',   default=None, help='UNUSED')
     return parser.parse_args()
 
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
+
 def parse_line(txt):
     subs = []
     for subtxt in txt.split('|'):
@@ -67,7 +72,7 @@ def interweigh(prompts, i, tt):
 def main():
     a = get_args(main_args())
     a.seed = a.seed or int((time.time()%1)*69696)
-    gen = torch.Generator("cuda").manual_seed(a.seed)
+    gen = torch.Generator(device).manual_seed(a.seed)
     gendict = {}
 
     def get_model(name, dir=a.models_dir):
@@ -85,30 +90,30 @@ def main():
     # prior pipe
     if isset(a, 'in_img') and isset(a, 'control_img'): # img2img + controlnet
         from diffusers import KandinskyV22PriorEmb2EmbPipeline as PR
-        pipe_prior = PR.from_pretrained(get_model('kandinsky-2-2-prior'), torch_dtype=torch.float16)
+        pipe_prior = PR.from_pretrained(get_model('kandinsky-2-2-prior'), torch_dtype=dtype)
     else: # KandinskyV22PriorPipeline
-        pipe_prior = DiffusionPipeline.from_pretrained(get_model('kandinsky-2-2-prior'), torch_dtype=torch.float16)
+        pipe_prior = DiffusionPipeline.from_pretrained(get_model('kandinsky-2-2-prior'), torch_dtype=dtype)
 
     # main pipe
     if isset(a, 'in_img'):
         if isset(a, 'mask'): # inpaint
             from diffusers import KandinskyV22InpaintPipeline as PP
-            pipe = PP.from_pretrained(get_model('kandinsky-2-2-decoder-inpaint'), torch_dtype=torch.float16)
+            pipe = PP.from_pretrained(get_model('kandinsky-2-2-decoder-inpaint'), torch_dtype=dtype)
         elif isset(a, 'control_img'): # img2img + controlnet
             from diffusers import KandinskyV22ControlnetImg2ImgPipeline as PP
-            pipe = PP.from_pretrained(get_model('kandinsky-2-2-controlnet-depth'), torch_dtype=torch.float16)
+            pipe = PP.from_pretrained(get_model('kandinsky-2-2-controlnet-depth'), torch_dtype=dtype)
         else: # img2img
             from diffusers import KandinskyV22Img2ImgPipeline as PP
-            pipe = PP.from_pretrained(get_model('kandinsky-2-2-decoder'), torch_dtype=torch.float16)
+            pipe = PP.from_pretrained(get_model('kandinsky-2-2-decoder'), torch_dtype=dtype)
     else:
         if isset(a, 'control_img'): # controlnet
             from diffusers import KandinskyV22ControlnetPipeline as PP
-            pipe = PP.from_pretrained(get_model('kandinsky-2-2-controlnet-depth'), torch_dtype=torch.float16)
+            pipe = PP.from_pretrained(get_model('kandinsky-2-2-controlnet-depth'), torch_dtype=dtype)
         else:
             PP = DiffusionPipeline # txt2img KandinskyV22Pipeline
-            pipe = PP.from_pretrained(get_model('kandinsky-2-2-decoder'), torch_dtype=torch.float16)
-    pipe_prior.to("cuda")
-    pipe.to("cuda")
+            pipe = PP.from_pretrained(get_model('kandinsky-2-2-decoder'), torch_dtype=dtype)
+    pipe_prior.to(device)
+    pipe.to(device)
 
     if isset(a, 'in_img'):
         assert os.path.exists(a.in_img), "!! Image(s) %s not found !!" % a.in_img
@@ -174,7 +179,7 @@ def main():
 
         if isset(a, 'control_img'):
             cimg, _ = load_img(cimg_paths[i % len(cimg_paths)], (W,H), tensor=False)
-            gendict['cimg'] = make_depth(cimg).unsqueeze(0).half().to("cuda")
+            gendict['cimg'] = make_depth(cimg).unsqueeze(0).to(device, dtype=dtype)
 
         if a.fstep <= 1: # single image
             prompt = prompts[i % len(prompts)]

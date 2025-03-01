@@ -3,7 +3,8 @@ import logging
 logging.getLogger('xformers').setLevel(logging.ERROR)
 logging.getLogger('diffusers.models.modeling_utils').setLevel(logging.CRITICAL)
 import warnings
-warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers.*", message='1Torch*')
+warnings.filterwarnings('ignore', category=FutureWarning, module="xformers.*")
 
 import os, sys
 import time
@@ -26,7 +27,7 @@ logging.getLogger('diffusers').setLevel(logging.ERROR)
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 
 from .text import multiprompt
-from .utils import file_list, img_list, load_img, makemask, isok, isset, progbar
+from .utils import file_list, img_list, load_img, makemask, isok, isset, progbar, clean_vram
 from .args import models, unprompt
 
 try:
@@ -37,7 +38,10 @@ try: # colab
     iscolab = True
 except: iscolab = False
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
 
 class SDpipe(StableDiffusionPipeline):
     def __init__(self, vae, text_encoder, tokenizer, unet, scheduler, image_encoder=None, \
@@ -52,7 +56,9 @@ class SDfu:
         # settings
         self.a = a
         self.device = device
-        self.run_scope = torch.autocast # nullcontext fails
+        self.dtype = dtype
+        if is_mac: self.a.lowmem = False # no model offloading on mac
+        self.run_scope = nullcontext if is_mac else torch.autocast # Don't use autocast for MPS
         if not isset(a, 'maindir'): a.maindir = './models' # for external scripts
         self.setseed(a.seed if isset(a, 'seed') else None)
         a.unprompt = unprompt(a)
@@ -77,13 +83,13 @@ class SDfu:
         if isset(a, 'load_custom') and os.path.isfile(a.load_custom): # custom diffusion
             from .finetune import load_delta, custom_diff
             self.pipe.unet = custom_diff(self.pipe.unet, train=False)
-            mod_tokens = load_delta(torch.load(a.load_custom), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
+            mod_tokens = load_delta(torch.load(a.load_custom, weights_only=True), self.pipe.unet, self.pipe.text_encoder, self.pipe.tokenizer)
         elif isset(a, 'load_token') and os.path.exists(a.load_token): # text inversion
             from .finetune import load_embeds
             emb_files = [a.load_token] if os.path.isfile(a.load_token) else file_list(a.load_token, 'pt')
             mod_tokens = []
             for emb_file in emb_files:
-                mod_tokens += load_embeds(torch.load(emb_file), self.pipe.text_encoder, self.pipe.tokenizer)
+                mod_tokens += load_embeds(torch.load(emb_file, weights_only=True), self.pipe.text_encoder, self.pipe.tokenizer)
         if mod_tokens is not None: print(' loaded tokens:', mod_tokens[0] if len(mod_tokens)==1 else mod_tokens)
 
         # load animatediff = before ip adapter, after custom diffusion !
@@ -110,7 +116,7 @@ class SDfu:
         if isset(a, 'img_ref'):
             from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection as CLIPimg
             self.image_preproc = CLIPImageProcessor.from_pretrained(os.path.join(a.maindir, 'image/preproc_config.json')) # openai/clip-vit-base-patch32
-            self.image_encoder = CLIPimg.from_pretrained(os.path.join(a.maindir, 'image'), torch_dtype=torch.float16).to(device)
+            self.image_encoder = CLIPimg.from_pretrained(os.path.join(a.maindir, 'image'), torch_dtype=dtype).to(device)
             self.pipe.register_modules(image_encoder = self.image_encoder)
             ip_dicts, ip_ws, self.ips = [], [], []
             srcs, ipas, iptypes, ws = a.img_ref.split('+'), a.ipa.split('+'), a.ip_type.split('+'), a.imgref_weight.split('+')
@@ -124,9 +130,9 @@ class SDfu:
                 if 'face' in iptype:
                     import insightface
                     self.face_align = insightface.utils.face_align
-                    self.faceidr = insightface.app.FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider'])
+                    self.faceidr = insightface.app.FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider' if is_cuda else 'CPUExecutionProvider'])
                     self.faceidr.prepare(ctx_id=0)
-                ip_dicts += [torch.load(ipa_path, map_location="cpu")]
+                ip_dicts += [torch.load(ipa_path, weights_only=True, map_location="cpu")]
                 ip_ws += [{'down': {'block_2':[ipw]*2}} if 'scen' in iptype else {'up': {'block_1': [ipw]*3, 'block_2':[ipw]*3}} if 'styl' in iptype else ipw]
                 self.ips += [iptype]
                 if a.verbose: print(' loading IP adapter %s for images' % os.path.basename(ipa_path), srcs[i % len(srcs)])
@@ -145,7 +151,7 @@ class SDfu:
             for cn in self.cns:
                 if not os.path.exists(cn): cn = os.path.join(self.a.maindir, 'control', cn)
                 assert os.path.exists(cn), "Not found ControlNet model %s" % cn
-                cnets += [ControlNetModel.from_pretrained(cn, torch_dtype=torch.float16)]
+                cnets += [ControlNetModel.from_pretrained(cn, torch_dtype=dtype)]
             self.cnet = MultiControlNetModel(cnets)
             if a.verbose: print(' loading ControlNets', self.cns)
             if not self.a.lowmem: self.cnet.to(device)
@@ -156,7 +162,7 @@ class SDfu:
 
     def load_model_external(self, model_path):
         SDload = StableDiffusionPipeline.from_single_file if os.path.isfile(model_path) else StableDiffusionPipeline.from_pretrained
-        self.pipe = SDload(model_path, torch_dtype=torch.float16, safety_checker=None)
+        self.pipe = SDload(model_path, torch_dtype=dtype, safety_checker=None)
         self.text_encoder = self.pipe.text_encoder
         self.tokenizer    = self.pipe.tokenizer
         self.unet         = self.pipe.unet
@@ -172,9 +178,9 @@ class SDfu:
         # text input
         txtenc_path = os.path.join(a.maindir, self.subdir, 'text-' + a.model[2:] if a.model[2:] in ['drm'] else 'text')
         if text_encoder is None:
-            text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True)
+            text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=dtype, local_files_only=True)
         if tokenizer is None:
-            tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16, local_files_only=True)
+            tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=dtype, local_files_only=True)
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
 
@@ -184,8 +190,7 @@ class SDfu:
                 from diffusers.models import UNet3DConditionModel as UNet
             else:
                 from diffusers.models import UNet2DConditionModel as UNet
-            unet = UNet.from_pretrained(unet_path, torch_dtype=torch.float16, local_files_only=True)
-        if not isxf and isinstance(unet.config.attention_head_dim, int): unet.set_attention_slice(unet.config.attention_head_dim // 2) # 8
+            unet = UNet.from_pretrained(unet_path, torch_dtype=dtype, local_files_only=True)
         self.unet = unet
 
         if vae is None:
@@ -193,7 +198,7 @@ class SDfu:
             if a.model[0]=='1' and a.vae != 'orig':
                 vae_path = 'vae-ft-mse' if a.vae=='mse' else 'vae-ft-ema'
             vae_path = os.path.join(a.maindir, self.subdir, vae_path)
-            vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16)
+            vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=dtype)
         if a.lowmem: vae.enable_tiling() # higher res, more free ram
         elif vidtype or isset(a, 'animdiff') or not isxf: vae.enable_slicing()
         self.vae = vae
@@ -262,8 +267,8 @@ class SDfu:
         if self.depthmod:
             from transformers import DPTForDepthEstimation, DPTImageProcessor
             depth_path = os.path.join(a.maindir, self.subdir, 'depth')
-            self.depth_estimator = DPTForDepthEstimation.from_pretrained(depth_path, torch_dtype=torch.float16).to(device)
-            self.feat_extractor  = DPTImageProcessor.from_pretrained(depth_path, torch_dtype=torch.float16, device=device)
+            self.depth_estimator = DPTForDepthEstimation.from_pretrained(depth_path, torch_dtype=dtype).to(device)
+            self.feat_extractor  = DPTImageProcessor.from_pretrained(depth_path, torch_dtype=dtype, device=device)
         if isset(a, 'img_scale') and a.img_scale > 0: # instruct pix2pix
             assert not (self.use_cnet or a.cfg_scale in [0,1]), "Use either Instruct-pix2pix or Controlnet guidance"
             a.strength = 1.
@@ -271,7 +276,7 @@ class SDfu:
         self.set_steps(a.steps, a.strength) # sampling
 
         # enable_model_cpu_offload
-        if self.a.lowmem:
+        if self.a.lowmem and is_cuda:
             assert is_accelerate_available() and is_accelerate_version(">=", "0.17.0.dev0"), " Install accelerate > 0.17 for model offloading"
             from accelerate import cpu_offload_with_hook
             hook = None
@@ -285,18 +290,18 @@ class SDfu:
 
     def setseed(self, seed=None):
         self.seed = seed or int((time.time()%1)*69696)
-        self.g_ = torch.Generator("cuda").manual_seed(self.seed)
+        self.g_ = torch.Generator(device).manual_seed(self.seed)
     
     def set_steps(self, steps, strength=1., warmup=1, device=device):
         if self.use_lcm:
             self.scheduler.set_timesteps(steps, device, strength=strength)
             self.timesteps = self.scheduler.timesteps
-            self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
+            self.lat_timestep = self.timesteps[:1].expand(self.a.batch, -1) # MPS-friendly expand
         else:
             self.scheduler.set_timesteps(steps, device=device)
             steps = min(int(steps * strength), steps) # t_enc .. 50
             self.timesteps = self.scheduler.timesteps[-steps - warmup :] # 1 warmup step
-            self.lat_timestep = self.timesteps[:1].repeat(self.a.batch)
+            self.lat_timestep = self.timesteps[:1].expand(self.a.batch, -1) # MPS-friendly expand
 
     def next_step_ddim(self, noise, t, sample):
         t, next_t = min(t - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), t
@@ -313,7 +318,7 @@ class SDfu:
         if c_img is not None: # list of [2,1,...] encodings for ip adapter, already with uc_img
             img_conds = [c_.chunk(2)[1] if self.a.cfg_scale in [0,1] else c_ for c_ in c_img]
             ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
-        with self.run_scope('cuda'):
+        with self.run_scope(device):
             for t in reversed(self.scheduler.timesteps):
                 with torch.no_grad():
                     if self.use_cnet and cnimg is not None: # controlnet
@@ -337,7 +342,7 @@ class SDfu:
         return img_conds # list of [2,1,1024] base or [2,1,257,1280] plus or [2,1,512] faceid
 
     def img_cu(self, images, ipnum): # uc and c together
-        with self.run_scope('cuda'):
+        with self.run_scope(device):
             if not isinstance(images, list): images = [images]
             if 'face' in self.ips[ipnum]:
                 faces = [self.faceidr.get(np.array(img)) for img in images]
@@ -349,15 +354,18 @@ class SDfu:
                 cs = self.image_encoder(images_t).image_embeds.mean(0, keepdim=True) # [1,1024]
                 ucs = torch.zeros_like(cs)
             elif isinstance(ip_layer, IPAdapterFaceIDImageProjection): # face id adapter
-                cs = torch.stack([torch.tensor(face).cuda().half() for face in faces]).mean(0, keepdim=True) # [1,512]
+                cs = torch.stack([torch.tensor(face).to(device, dtype=dtype) for face in faces]).mean(0, keepdim=True) # [1,512]
                 ucs = torch.zeros_like(cs)
             elif isinstance(ip_layer, IPAdapterFaceIDPlusImageProjection): # face id plus adapter, fixed for all frames
-                cs = torch.stack([torch.tensor(face).cuda().half() for face in faces]).mean(0, keepdim=True) # [1,512]
+                cs = torch.stack([torch.tensor(face).to(device, dtype=dtype) for face in faces]).mean(0, keepdim=True) # [1,512]
                 ucs = torch.zeros_like(cs)
                 clip_cs = self.image_encoder(images_t, output_hidden_states=True).hidden_states[-2].mean(0, keepdim=True) # [1,257,1280]
                 clip_ucs = self.image_encoder(torch.zeros_like(images_t), output_hidden_states=True).hidden_states[-2].mean(0, keepdim=True)
-                ip_layer.clip_embeds = torch.stack([clip_ucs, clip_cs]).to(dtype=torch.float16)
-                if isset(self.a, 'animdiff'): ip_layer.clip_embeds = ip_layer.clip_embeds.repeat_interleave(self.a.ctx_frames, dim=0) # fix for framesets
+                ip_layer.clip_embeds = torch.stack([clip_ucs, clip_cs]).to(dtype=dtype)
+                if isset(self.a, 'animdiff'): # fix for framesets
+                    clip_embeds = ip_layer.clip_embeds.detach().clone()
+                    ip_layer.clip_embeds = clip_embeds.repeat_interleave(self.a.ctx_frames, dim=0) # MPS-friendly
+                    del clip_embeds
                 ip_layer.shortcut = 'plus2' in self.a.ipa.split('+')[ipnum % len(self.a.ipa.split('+'))] # True if plus v2
             elif isinstance(ip_layer, (IPAdapterPlusImageProjection, IPAdapterFullImageProjection)): # plus-family adapters
                 cs = self.image_encoder(images_t, output_hidden_states=True).hidden_states[-2].mean(0, keepdim=True) # [1,257,1280]
@@ -367,15 +375,18 @@ class SDfu:
             return torch.stack([ucs, cs]) # [2,1,1024] base or [2,1,257,1280] plus or [2,1,512] faceid
 
     def img_lat(self, image, deterministic=False):
-        with self.run_scope('cuda'):
-            postr = self.vae.encode(image.half()).latent_dist
+        with self.run_scope(device):
+            if image.device.type != device: image = image.to(device)
+            if image.dtype != dtype: image = image.to(dtype=dtype)
+            postr = self.vae.encode(image).latent_dist
             lats = postr.mean if deterministic else postr.sample(self.g_)
             lats *= self.vae.config.scaling_factor
         return torch.cat([lats] * self.a.batch)
 
     def lat_z(self, lat): # ddim stochastic encode, fast, not exact
-        with self.run_scope('cuda'):
-            return self.scheduler.add_noise(lat, torch.randn(lat.shape, generator=self.g_, device=device, dtype=lat.dtype), self.lat_timestep)
+        with self.run_scope(device):
+            timestep = self.lat_timestep[:1].expand(lat.shape[0], -1) # MPS-friendly expand 
+            return self.scheduler.add_noise(lat, torch.randn(lat.shape, generator=self.g_, device=device, dtype=lat.dtype), timestep)
 
     def img_z(self, image):
         return self.lat_z(self.img_lat(image))
@@ -383,14 +394,14 @@ class SDfu:
     def rnd_z(self, H, W, frames=None):
         shape_ = [self.a.batch, 4, H // self.vae_scale, W // self.vae_scale] # image b,4,h,w
         if frames is not None: shape_.insert(2, frames) # video b,4,f,h,w
-        lat = torch.randn(shape_, generator=self.g_, device=device, dtype=torch.float16)
+        lat = torch.randn(shape_, generator=self.g_, device=device, dtype=dtype)
         return self.scheduler.init_noise_sigma * lat
 
     def prep_mask(self, mask_str, img_path, init_image=None):
         image_pil, _ = load_img(img_path, tensor=False)
         if init_image is None:
             init_image, (W,H) = load_img(img_path)
-        with self.run_scope('cuda'):
+        with self.run_scope(device):
             mask = makemask(mask_str, image_pil, self.a.invert_mask, model_path=self.clipseg_path)
             masked_lat = self.img_lat(init_image * mask)
             mask = F.interpolate(mask, size = masked_lat.shape[-2:], mode="bicubic", align_corners=False)
@@ -398,7 +409,7 @@ class SDfu:
 
     def prep_depth(self, init_image):
         [H, W] = init_image.shape[-2:]
-        with torch.no_grad(), self.run_scope('cuda'):
+        with torch.no_grad(), self.run_scope(device):
             preps = self.feat_extractor(images=[(init_image.squeeze(0)+1)/2], return_tensors="pt").pixel_values
             preps = F.interpolate(preps, size=[384,384], mode="bicubic", align_corners=False).to(device)
             dd = self.depth_estimator(preps).predicted_depth.unsqueeze(0) # [1,1,384,384]
@@ -416,13 +427,15 @@ class SDfu:
         b, ch, seq, lath, latw = orig_lats.shape # [b,4,f,h,w]
         attn_map = attn_map.reshape(b * seq, h, hw1, hw2) # [b*f,8,144,144]
         attn_mask = attn_map.mean(1, keepdim=False).sum(1, keepdim=False) > 1.0 # [b*f,144]
-        attn_mask = attn_mask.reshape(b, seq, map_size[0], map_size[1]).unsqueeze(1).repeat(1, ch, 1, 1, 1).type(attn_map.dtype) # [b,ch,f,12,12]
+        attn_mask = attn_mask.reshape(b, seq, map_size[0], map_size[1]).unsqueeze(1)
+        attn_mask = attn_mask.repeat(1, ch, 1, 1, 1).type(attn_map.dtype) # [b,ch,f,12,12] # orig
         attn_mask = torch.stack([F.interpolate(attn_mask[:,:,i], (lath, latw)) for i in range(seq)]).permute(1,2,0,3,4)
         degraded_lats = torch.stack([gaussian_blur_2d(orig_lats[:,:,i], kernel_size=9, sigma=1.0) for i in range(seq)]).permute(1,2,0,3,4)
         degraded_lats = degraded_lats * attn_mask + orig_lats * (1 - attn_mask)
         if len(eps.shape) < len(degraded_lats.shape):
             degraded_lats = degraded_lats.squeeze(2) # get back to unet2D
-        degraded_lats = self.scheduler.add_noise(degraded_lats, noise=eps, timesteps=t[None]) # Noise it again to match the noise level
+        t_expanded = torch.cat([t[None]] * len(degraded_lats), dim=0) # MPS-friendly expand
+        degraded_lats = self.scheduler.add_noise(degraded_lats, noise=eps, timesteps=t_expanded) # Noise it again to match the noise level
         return degraded_lats
 
     def pred_x0(self, sample, model_output, timestep): # from DDIMScheduler.step
@@ -443,7 +456,7 @@ class SDfu:
                 nonlocal map_size
                 map_size = output[0].shape[-2:]
         loop_context = self.unet.mid_block.attentions[0].register_forward_hook(get_map_size) if self.a.sag_scale > 0 else nullcontext() # SAG
-        with torch.no_grad(), self.run_scope('cuda'), loop_context:
+        with torch.no_grad(), self.run_scope(device), loop_context:
             if cws is None or not len(cws) == len(cs): cws = [len(uc) / len(cs)] * len(cs)
             conds = uc if cfg_scale==0 else cs if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
             if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
@@ -512,20 +525,20 @@ class SDfu:
                 def calc_cnet_batch(x, t, conds, cnimg):
                     bx = rearrange(x, 'b c f h w -> (b f) c h w' ) # bs repeat, frames interleave
                     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-                        self.unet.to("cpu"); torch.cuda.empty_cache()
+                        self.unet.to("cpu"); clean_vram()
                     ctl_downs, ctl_mid = self.cnet(bx, t, conds, [ci.repeat(bs,1,1,1) for ci in cnimg], self.cnet_ws, return_dict=False)
                     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-                        self.cnet.to("cpu"); torch.cuda.empty_cache()
+                        self.cnet.to("cpu"); clean_vram()
                     return ctl_downs, ctl_mid
 
                 if len(lat_in.shape)==4: # unet2D [b,c,h,w]
                     if self.use_cnet and cnimg is not None: # controlnet = max 960x640 or 768 on 16gb
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-                            self.unet.to("cpu"); torch.cuda.empty_cache()
+                            self.unet.to("cpu"); clean_vram()
                         ctl_downs, ctl_mid = self.cnet(lat_in, t, conds, cnimg, self.cnet_ws, return_dict=False)
                         ukwargs = {**ukwargs, 'down_block_additional_residuals': ctl_downs, 'mid_block_additional_residual': ctl_mid}
                         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-                            self.cnet.to("cpu"); torch.cuda.empty_cache()
+                            self.cnet.to("cpu"); clean_vram()
                     noise_pred = calc_noise(lat_in, t, conds, ukwargs)
 
                 else: # unet3D [b,c,f,h,w]
@@ -571,7 +584,7 @@ class SDfu:
             lat /= self.vae.config.scaling_factor
 
             if len(lat.shape)==5: # video
-                lat = lat.permute(0,2,1,3,4).squeeze(0).half() # [f,c,h,w]
+                lat = lat.permute(0,2,1,3,4).squeeze(0).to(dtype=dtype) # [f,c,h,w]
                 output = torch.cat([self.vae.decode(lat[b : b + self.a.vae_batch]).sample.float().cpu() for b in range(0, len(lat), self.a.vae_batch)])
                 output = output[None,:].permute(0,2,1,3,4) # [1,c,f,h,w]
             else: # image
@@ -642,4 +655,3 @@ def gaussian_blur_2d(img, kernel_size, sigma):
     img = F.pad(img, padding, mode="reflect")
     img = F.conv2d(img, kernel2d, groups=img.shape[-3])
     return img
-

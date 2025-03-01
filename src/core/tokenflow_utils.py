@@ -4,6 +4,10 @@ from typing import Type
 
 import torch
 
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
+
 def batch_cosine_sim(x, y):
     if type(x) is list:
         x = torch.cat(x, dim=0)
@@ -74,7 +78,8 @@ def reg_conv_injection(model, injection_schedule):
             hidden_states = self.conv1(hidden_states)
 
             if temb is not None:
-                temb = self.time_emb_proj(self.nonlinearity(temb))[:, :, None, None]
+                temb = self.time_emb_proj(self.nonlinearity(temb))
+                temb = temb.unsqueeze(-1).unsqueeze(-1) # MPS-friendly unsqueeze
 
             if temb is not None and self.time_embedding_norm == "default":
                 hidden_states = hidden_states + temb
@@ -136,12 +141,18 @@ def reg_extended_attention_pnp(model, injection_schedule):
                 k[2 * fnum:] = k[:fnum]
 
             k_source = k[:fnum]
-            k_uncond = k[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
-            k_cond = k[2 * fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # MPS-friendly 
+            k_uncond = k[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            k_cond = k[2 * fnum:].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            # k_uncond = k[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # k_cond = k[2 * fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
 
             v_source = v[:fnum]
-            v_uncond = v[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
-            v_cond = v[2 * fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # MPS-friendly 
+            v_uncond = v[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            v_cond = v[2 * fnum:].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            # v_uncond = v[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # # v_cond = v[2 * fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
 
             q_source = self.head_to_batch_dim(q[:fnum])
             q_uncond = self.head_to_batch_dim(q[fnum:2 * fnum])
@@ -153,15 +164,15 @@ def reg_extended_attention_pnp(model, injection_schedule):
             v_uncond = self.head_to_batch_dim(v_uncond)
             v_cond = self.head_to_batch_dim(v_cond)
 
-            q_src = q_source.view(fnum, h, seqlen, dim // h)
-            k_src = k_source.view(fnum, h, seqlen, dim // h)
-            v_src = v_source.view(fnum, h, seqlen, dim // h)
-            q_uncond = q_uncond.view(fnum, h, seqlen, dim // h)
-            k_uncond = k_uncond.view(fnum, h, seqlen * fnum, dim // h)
-            v_uncond = v_uncond.view(fnum, h, seqlen * fnum, dim // h)
-            q_cond = q_cond.view(fnum, h, seqlen, dim // h)
-            k_cond = k_cond.view(fnum, h, seqlen * fnum, dim // h)
-            v_cond = v_cond.view(fnum, h, seqlen * fnum, dim // h)
+            # q_src = q_source.view(fnum, h, seqlen, dim // h)
+            # k_src = k_source.view(fnum, h, seqlen, dim // h)
+            # v_src = v_source.view(fnum, h, seqlen, dim // h)
+            # q_uncond = q_uncond.view(fnum, h, seqlen, dim // h)
+            # k_uncond = k_uncond.view(fnum, h, seqlen * fnum, dim // h)
+            # v_uncond = v_uncond.view(fnum, h, seqlen * fnum, dim // h)
+            # q_cond = q_cond.view(fnum, h, seqlen, dim // h)
+            # k_cond = k_cond.view(fnum, h, seqlen * fnum, dim // h)
+            # v_cond = v_cond.view(fnum, h, seqlen * fnum, dim // h)
 
             out_source_all = []
             out_uncond_all = []
@@ -237,15 +248,22 @@ def reg_extended_attention(model):
             v = self.to_v(encoder_hidden_states)
 
             k_source = k[:fnum]
-            k_uncond = k[fnum: 2*fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
-            k_cond = k[2*fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # MPS-friendly 
+            k_uncond = k[fnum:2*fnum].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            k_cond = k[2*fnum:].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            # k_uncond = k[fnum: 2*fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # k_cond = k[2*fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+
             v_source = v[:fnum]
-            v_uncond = v[fnum:2*fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
-            v_cond = v[2*fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # MPS-friendly 
+            v_uncond = v[fnum:2*fnum].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            v_cond = v[2*fnum:].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
+            # v_uncond = v[fnum:2*fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # v_cond = v[2*fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
 
             q_source = self.head_to_batch_dim(q[:fnum])
-            q_uncond = self.head_to_batch_dim(q[fnum: 2*fnum])
-            q_cond = self.head_to_batch_dim(q[2 * fnum:])
+            q_uncond = self.head_to_batch_dim(q[fnum:2*fnum])
+            q_cond = self.head_to_batch_dim(q[2*fnum:])
             k_source = self.head_to_batch_dim(k_source)
             k_uncond = self.head_to_batch_dim(k_uncond)
             k_cond = self.head_to_batch_dim(k_cond)
@@ -382,8 +400,8 @@ def make_tokenflow_attention_block(block_class: Type[torch.nn.Module]) -> Type[t
                     # weight
                     w1 = d2 / (d1 + d2)
                     w1 = torch.sigmoid(w1)
-                    
-                    w1 = w1.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).repeat(3, 1, seqlen, dim)
+                    w1 = w1.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).expand(3, fnum, seqlen, dim) # MPS-friendly ?
+                    # w1 = w1.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).repeat(3, 1, seqlen, dim)
                     attn_output1 = attn_output1.view(3, fnum, seqlen, dim)
                     attn_output2 = attn_output2.view(3, fnum, seqlen, dim)
                     attn_output = w1 * attn_output1 + (1 - w1) * attn_output2 # [3, fnum, seqlen, dim]
@@ -394,7 +412,7 @@ def make_tokenflow_attention_block(block_class: Type[torch.nn.Module]) -> Type[t
                 attn_output = self.attn_output.reshape(batch_size, seqlen, dim) # reshape required for pivot batch
             hidden_states = hidden_states.reshape(batch_size, seqlen, dim)  # 3*fnum, seqlen, dim
             hidden_states = attn_output + hidden_states
-            hidden_states = hidden_states.half() # !!! hack fix
+            hidden_states = hidden_states.to(dtype=dtype) # !!! hack fix
 
             if self.attn2 is not None:
                 norm_hid_states = self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)

@@ -35,7 +35,10 @@ def get_args():
     parser.add_argument('-sz', '--size',    default=None, help="image size, multiple of 8")
     return parser.parse_args()
 
-device = torch.device('cuda')
+is_mac = torch.backends.mps.is_available() and torch.backends.mps.is_built() # M1/M2 chip?
+is_cuda = torch.cuda.is_available()
+device = 'mps' if is_mac else 'cuda' if is_cuda else 'cpu'
+dtype = torch.float16 if is_cuda or is_mac else torch.float32
 
 class SDpipe(DiffusionPipeline):
     def __init__(self, vae, text_encoder, tokenizer, unet, scheduler):
@@ -50,16 +53,16 @@ def sd_setup(a):
 
     # text encoder & tokenizer
     txtenc_path = os.path.join(a.maindir, subdir, 'text')
-    text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=torch.float16).to(device)
-    tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=torch.float16)
+    text_encoder = CLIPTextModel.from_pretrained(txtenc_path, torch_dtype=dtype).to(device)
+    tokenizer    = CLIPTokenizer.from_pretrained(txtenc_path, torch_dtype=dtype)
 
     # unet
     unet_path = os.path.join(a.maindir, subdir, 'unet' + a.model)
-    unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch.float16).to(device)
+    unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=dtype).to(device)
 
     # vae
     vae_path = os.path.join(a.maindir, subdir, 'vae')
-    vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=torch.float16).to(device)
+    vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=dtype).to(device)
 
     # scheduler
     sched_path = os.path.join(a.maindir, subdir, 'scheduler_config.json')
@@ -80,9 +83,9 @@ def sd_setup(a):
 
     # main functions
     def img_lat(image):
-        image = image.half()
+        image = image.to(dtype=dtype)
         lats = vae.encode(image).latent_dist.sample() * vae.config.scaling_factor
-        return torch.cat([lats])
+        return torch.cat([lats], dim=0)
     def lat_z(lat):
         return scheduler.add_noise(lat, torch.randn(lat.shape, device=device, dtype=lat.dtype), lat_timestep)
     def img_z(image):
@@ -97,18 +100,18 @@ def sd_setup(a):
         return prompt_embeds.to(dtype=text_encoder.dtype)
 
     pipe = SDpipe(vae, text_encoder, tokenizer, unet, scheduler).to(device)
-    if is_xformers_available: pipe.enable_xformers_memory_efficient_attention()
+    if is_xformers_available and is_cuda: pipe.enable_xformers_memory_efficient_attention()
 
     uc = txt_c([""])
 
     def generate(lat, c_):
-        with torch.no_grad(), torch.autocast('cuda'):
+        with torch.no_grad(), torch.nullcontext(device):
             print(uc.shape, c_.shape)
-            conds = torch.cat([uc, c_])
+            conds = torch.cat([uc, c_], dim=0)
 
             pbar = progbar(len(timesteps) - 1)
             for i, t in enumerate(timesteps):
-                lat_in = torch.cat([lat] * 2) # expand latents for classifier free guidance
+                lat_in = torch.cat([lat] * 2, dim=0) # expand latents for classifier free guidance
                 lat_in = scheduler.scale_model_input(lat_in, t) # not needed for ddim/pndm
 
                 noise_pred_uncond, noise_pred_cond = unet(lat_in, t, conds).sample.chunk(2) # pred noise residual at step t
