@@ -27,7 +27,7 @@ logging.getLogger('diffusers').setLevel(logging.ERROR)
 sys.path.append(os.path.join(os.path.dirname(__file__), '../xtra'))
 
 from .text import multiprompt
-from .utils import file_list, img_list, load_img, makemask, isok, isset, progbar, clean_vram
+from .utils import file_list, img_list, load_img, makemask, isok, isset, progbar, gpu_ram, clean_vram
 from .args import models, unprompt
 
 try:
@@ -76,6 +76,7 @@ class SDfu:
         else: # downloaded or url
             self.load_model_external(a.model)
         if not self.a.lowmem: self.pipe.to(device)
+        if is_mac: self.pipe.enable_attention_slicing()
         self.use_kdiff = hasattr(self.scheduler, 'sigmas') # k-diffusion sampling
 
         # load finetuned stuff

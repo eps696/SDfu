@@ -13,7 +13,7 @@ Current functions:
 * Image edits (re- and in-painting)
 * **Various interpolations** (between/upon images or text prompts, smoothed by [latent blending])
 * Guidance with [ControlNet] (depth, depth-anything, pose, canny edges)
-* **Video generation** with [CogVideoX], [AnimateDiff] and [ZeroScope] models (smooth & unlimited, as in [ComfyUI])
+* **Video generation** with [CogVideoX], [LTXV], [AnimateDiff] and [ZeroScope] models (virtually unlimited for the latter two)
 * Smooth & stable video edit with [TokenFlow]
 * **Ultra-fast generation** with [TCD Scheduler] or [SDXL-Lightning] model (combined with other features)
 * Ultra-fast generation with [LCM] model (not fully tested with all operations yet)
@@ -35,16 +35,23 @@ Other features:
 
 ## Setup
 
-Install CUDA 11.8 if you're on Windows (seems not necessary on Linux with Conda).  
-Setup the Conda environment:
+Example of setup on Windows:  
+First install Visual Studio, CUDA 12.1, and Miniconda. Then run (in Conda prompt, from the repo directory):
 ```
-conda create -n SD python=3.10 numpy pillow 
+conda create -n SD python=3.11
 activate SD
-pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
+pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+pip install xformers==0.0.27.post2 optimum-quanto==0.2.4
 pip install -r requirements.txt
-pip install xformers
 ```
-NB: It's preferrable to install `xformers` library - to increase performance and to run SD in any resolution on the lower grade hardware (e.g. videocards with 6gb VRAM). However, it's not guaranteed to work with all the (quickly changing) versions of `pytorch`, hence it's separated from the rest of requirements. If you're on Windows, first ensure that you have Visual Studio 2019 installed. 
+
+Example of similar setup on Mac / MPS (without CUDA):  
+```
+conda create -n SD python=3.11
+activate SD
+pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0
+pip install -r requirements.txt
+```
 
 Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
 [custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [IP adapters] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
@@ -153,6 +160,15 @@ TokenFlow employs either `pnp` or `sde` method and can be used with various mode
 
 ## Video Synthesis
 
+Generate a video from the text prompt (the more it's detailed the better!) with **[LTXV]** model:
+```
+python src/ltxv.py --frames 121 -ST 1.5 -t "late afternoon light casting long shadows,a cyclist athlet pedaling down a scenic mountain track"
+```
+Animate an image (you may add text prompt as well, just ensure that it's very detailed and strongly relating to the image):
+```
+python src/ltxv.py -ST 1.5 -im _in/pix/bench2.jpg
+```
+
 Generate a video from the text prompt (make it as detailed as possible!) with **[CogVideoX]** model:
 ```
 python src/cogx.py --frames 101 --loop -t "late afternoon light casting long shadows,a cyclist athlet pedaling down a scenic mountain track"
@@ -170,6 +186,7 @@ Generate a video from a directory of images with 50 frames between keyframes (ve
 python src/cogx.py -im yourimagedir --fstep 50 -t "decaying metallic sculpture, rusted swirls of iron oxide, jagged edges worn smooth"
 ```
 NB: Generation of longer sequences is an abnormal use of the current CogX model, and often leads to degraded quality and leaked stock watermark appearance (especially with image-to-video model), so use it with care. Option `--rot_emb` (recalculate positional embeddings for full length) may give better temporal consistency but deteriorated image quality. More reliable way to achieve necessary length may be to prolong previous video pieces in a few 49-frames steps. You can also try `--dyn_cfg` option for text-to-video generations (works better for shorter pieces).
+
 
 Generate a video from a text prompt with **[AnimateDiff]** motion adapter (may combine it with any base SD model):
 ```
@@ -304,6 +321,7 @@ Huge respect to the people behind [Stable Diffusion], [Hugging Face], and the wh
 [latent blending]: <https://github.com/lunarring/latentblending>
 [LCM]: <https://latent-consistency-models.github.io>
 [Kandinsky]: <https://huggingface.co/kandinsky-community>
+[LTXV]: <https://huggingface.co/Lightricks/LTX-Video>
 [CogVideoX]: <https://github.com/THUDM/CogVideo>
 [AnimateDiff]: <https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2>
 [ZeroScope]: <https://huggingface.co/cerspense/zeroscope_v2_576w>

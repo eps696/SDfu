@@ -3,16 +3,16 @@ git+https://github.com/huggingface/diffusers
 git+https://github.com/openai/CLIP
 torchmetrics
 accelerate
-safetensors==0.3.1
+safetensors
 peft
 
 imageio-ffmpeg
 omegaconf
 easydict
-numpy==1.23
+numpy==1.26.4
 tqdm
 einops
-opencv-python==4.8.0.76
+opencv-python
 timm
 scikit-image
 jsonmerge

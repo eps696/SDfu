@@ -28,7 +28,7 @@ except: # normal console
     maybe_colab = False
 
 def gpu_ram():
-    return torch.cuda.get_device_properties(0).total_memory // (1024*1024*1023)
+    return torch.cuda.get_device_properties(0).total_memory // (1024*1024*1023) if is_cuda else 0
 
 def clean_vram():
     torch.cuda.empty_cache() if is_cuda else torch.mps.empty_cache() if is_mac and hasattr(torch.mps, 'empty_cache') else None

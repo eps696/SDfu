@@ -61,9 +61,8 @@ class CogX:
         self.device = device
         self.seed = a.seed or int((time.time()%1)*69696)
 
-        mod_path = os.path.join("models/cogx", 'i2v' if isset(a, 'img2vid') else 'main')
+        mod_path = os.path.join(a.maindir, 'xtra/cogx', 'i2v' if isset(a, 'img2vid') else 'main')
         if not os.path.isdir(mod_path): mod_path = 'THUDM/CogVideoX-5b-I2V' if isset(a, 'img2vid') else 'THUDM/CogVideoX-5b'
-        
 
         self.tokenizer = T5Tokenizer.from_pretrained(mod_path, subfolder="tokenizer")
         self.text_encoder = T5EncoderModel.from_pretrained(mod_path, subfolder="text_encoder", torch_dtype=dtype)
