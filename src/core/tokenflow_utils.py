@@ -152,7 +152,7 @@ def reg_extended_attention_pnp(model, injection_schedule):
             v_uncond = v[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
             v_cond = v[2 * fnum:].reshape(1, fnum * seqlen, -1).expand(fnum, fnum * seqlen, -1)
             # v_uncond = v[fnum:2 * fnum].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
-            # # v_cond = v[2 * fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
+            # v_cond = v[2 * fnum:].reshape(1, fnum * seqlen, -1).repeat(fnum, 1, 1)
 
             q_source = self.head_to_batch_dim(q[:fnum])
             q_uncond = self.head_to_batch_dim(q[fnum:2 * fnum])
@@ -164,15 +164,15 @@ def reg_extended_attention_pnp(model, injection_schedule):
             v_uncond = self.head_to_batch_dim(v_uncond)
             v_cond = self.head_to_batch_dim(v_cond)
 
-            # q_src = q_source.view(fnum, h, seqlen, dim // h)
-            # k_src = k_source.view(fnum, h, seqlen, dim // h)
-            # v_src = v_source.view(fnum, h, seqlen, dim // h)
-            # q_uncond = q_uncond.view(fnum, h, seqlen, dim // h)
-            # k_uncond = k_uncond.view(fnum, h, seqlen * fnum, dim // h)
-            # v_uncond = v_uncond.view(fnum, h, seqlen * fnum, dim // h)
-            # q_cond = q_cond.view(fnum, h, seqlen, dim // h)
-            # k_cond = k_cond.view(fnum, h, seqlen * fnum, dim // h)
-            # v_cond = v_cond.view(fnum, h, seqlen * fnum, dim // h)
+            q_src = q_source.view(fnum, h, seqlen, dim // h)
+            k_src = k_source.view(fnum, h, seqlen, dim // h)
+            v_src = v_source.view(fnum, h, seqlen, dim // h)
+            q_uncond = q_uncond.view(fnum, h, seqlen, dim // h)
+            k_uncond = k_uncond.view(fnum, h, seqlen * fnum, dim // h)
+            v_uncond = v_uncond.view(fnum, h, seqlen * fnum, dim // h)
+            q_cond = q_cond.view(fnum, h, seqlen, dim // h)
+            k_cond = k_cond.view(fnum, h, seqlen * fnum, dim // h)
+            v_cond = v_cond.view(fnum, h, seqlen * fnum, dim // h)
 
             out_source_all = []
             out_uncond_all = []

@@ -9,8 +9,6 @@ from core.args import main_args
 from core.text import multiprompt
 from core.utils import load_img, save_img, slerp, lerp, blend, calc_size, isset, read_latents, img_list, basename, progbar, cvshow, save_cfg
 
-samplers = ['klms', 'euler', 'ddim', 'pndm']
-
 def get_args(parser):
     parser.add_argument('-il', '--in_lats', default=None, help='Directory or file with saved keypoints to interpolate between')
     parser.add_argument('-ol', '--out_lats', default=None, help='File to save keypoints for further interpolation')
@@ -54,9 +52,7 @@ def cond_mix(a, csb, cwb, i, tt=0):
 @torch.no_grad()
 def main():
     a = get_args(main_args())
-    if a.model[-1] in ['i', 'd'] or (isset(a, 'in_img') and os.path.isdir(a.in_img)): 
-        a.sampler = 'ddim' # k-samplers don't work with concat-models; images slerp = full ddim sampling with inversion
-    if a.latblend > 0: assert a.sampler in ['ddim', 'euler'], "Latent blending works only with euler or ddim samplers"
+    if isset(a, 'in_img') and os.path.isdir(a.in_img): a.sampler = 'ddim' # images interpolation = full ddim sampling with inversion
 
     sd = SDfu(a)
     a = sd.a

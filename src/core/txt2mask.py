@@ -105,7 +105,6 @@ class Txt2Mask(object):
         img = transform(img).unsqueeze(0)
 
         preds = self.model(img.detach().clone().repeat_interleave(len(prompts), dim=0), prompts)[0] # MPS-friendly 
-        # preds = self.model(img.repeat(len(prompts),1,1,1), prompts)[0]
         heatmap = torch.sigmoid(preds[0][0]).cpu()
         self._to_device('cpu')
         return SegmentedGrayscale(image, heatmap)

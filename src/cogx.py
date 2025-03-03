@@ -42,6 +42,7 @@ def get_args(parser):
     # override
     parser.add_argument('-C','--cfg_scale', default=6, type=float, help="prompt guidance scale")
     parser.add_argument('-s',  '--steps',   default=50, type=int, help="number of diffusion steps")
+    parser.add_argument('-post','--postxt', default='. hyperrealistic photography with intricate details, cinematic scene, professional lighting')
     parser.add_argument('-un','--unprompt', default='low quality, oversaturated', help='Negative prompt')
     return parser.parse_args()
 
@@ -71,11 +72,7 @@ class CogX:
         self.scheduler = CogVideoXDPMScheduler.from_pretrained(mod_path, subfolder="scheduler") # CogVideoXDDIMScheduler CogVideoXDPMScheduler
         self.pipe = CogXpipe(self.tokenizer, self.text_encoder, self.vae, self.transformer, self.scheduler)
 
-        self.vae_scale_s = 2 ** (len(self.vae.config.block_out_channels) - 1)
-        self.vae_scale_t = self.vae.config.temporal_compression_ratio
-        self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_s)
-
-        if a.lowmem or gpu_ram() < 20:
+        if is_cuda and (a.lowmem or gpu_ram() < 20):
             try:
                 from optimum.quanto import freeze, quantize, qfloat8 # qfloat8_e4m3fn, qfloat8_e5m2, qint8, qint4, qint2
                 quantize(self.text_encoder, weights=qfloat8); freeze(self.text_encoder)
@@ -85,13 +82,19 @@ class CogX:
             except:
                 print(' Quantization support requires optimum-quanto library with Python 3.10+ and Torch 2.4')
 
-        self.pipe.enable_model_cpu_offload()
-        # self.pipe.enable_sequential_cpu_offload()
+        if is_cuda:
+            self.pipe.enable_model_cpu_offload()
+            # self.pipe.enable_sequential_cpu_offload()
         if not is_mac:
             self.transformer.to(memory_format=torch.channels_last)
         self.vae.enable_slicing()
         self.vae.enable_tiling()
 
+        self.lat_ch = self.transformer.config.in_channels # 16 or 32
+        if isset(self.a, 'img2vid'): self.lat_ch = self.lat_ch // 2
+        self.vae_scale_s = 2 ** (len(self.vae.config.block_out_channels) - 1)
+        self.vae_scale_t = self.vae.config.temporal_compression_ratio
+        self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_s)
         self.g_ = torch.Generator(device).manual_seed(self.seed)
 
         self.sched_kwargs = {'eta': a.eta} if "eta" in set(inspect.signature(self.scheduler.step).parameters.keys()) else {}
@@ -118,11 +121,11 @@ class CogX:
         return cs.to(self.device, dtype=self.text_encoder.dtype).expand(num, -1, -1) # mps-friendly
 
     def encode_prompt(self, prompt, unprompt=None, num=1, maxlen=226):
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        bs = len(prompt)
+        if isinstance(prompt, str): prompt = [prompt]
         cs = self.get_t5_emb(prompt, num=num, maxlen=maxlen)
         if self.a.cfg_scale not in [0,1]:
-            if isinstance(unprompt, str): unprompt = bs * [unprompt]
+            if isinstance(unprompt, str): unprompt = [unprompt]
+            if len(unprompt) == 1: unprompt = unprompt * len(prompt)
             uc = self.get_t5_emb(unprompt, num=num, maxlen=maxlen)
             cs = torch.cat([uc, cs])
         return cs
@@ -154,24 +157,25 @@ class CogX:
         if count == 1: return [0]
         return [int(i * (length-1) / (count-1)) for i in range(count)]
 
-    def make_lat(self, bs=1, ch=16, num_frames=49, height=60, width=90, image=None, imgpos=None, video=None, dtype=None):
+    def make_lat(self, bs=1, num_frames=49, height=60, width=90, image=None, imgpos=None, video=None, dtype=None):
         num_frm = (num_frames - 1) // self.vae_scale_t + 1
-        shape = (bs, num_frm, ch, height // self.vae_scale_s, width // self.vae_scale_s) # [1,13,16,60,90]
+        shape = (bs, num_frm, self.lat_ch, height // self.vae_scale_s, width // self.vae_scale_s) # [1,13,16,60,90]
         img_lat = None
+        vid_lat = None
         if image is not None: # [n,c,h,w]
             if imgpos is None: imgpos = self.calc_ids(num_frm, len(image))
             img_lat = torch.zeros(shape, device=self.device, dtype=dtype) # [1,13,16,60,90]
             in_lats = self.init_lat(image.unsqueeze(2), dtype) # [n,1,16,60,90]
             for i, n in enumerate(imgpos):
-                img_lat[:,n] = in_lats[i]
+                img_lat[:,n] = in_lats[min(i, len(in_lats)-1)]
         elif video is not None and num_frames > video.size(2): # video expansion
-            img_lat = self.init_lat(video, dtype) # [b,f,c,h,w]
-            pad_shape = (bs, num_frm - img_lat.shape[1], *shape[2:])
+            vid_lat = self.init_lat(video, dtype) # [b,f,16,60,90]  [b,f,c,h,w]
+            pad_shape = (bs, num_frm - vid_lat.shape[1], *shape[2:])
             pad_lat = torch.zeros(pad_shape, device=self.device, dtype=dtype)
-            img_lat = torch.cat([img_lat, pad_lat], dim=1) # [b,F,c,h,w]
+            img_lat = torch.cat([vid_lat, pad_lat], dim=1) # [b,F,c,h,w]
         lat = torch.randn(shape, generator=self.g_, device=self.device, dtype=dtype)
         if video is not None: # [b,c,f,h,w]
-            vid_lat = self.init_lat(video, dtype) # [b,f,c,h,w]
+            if vid_lat is None: vid_lat = self.init_lat(video, dtype) # [b,f,16,60,90]  [b,f,c,h,w]
             vid_frm = vid_lat.shape[1]
             lat[:,:vid_frm] = self.scheduler.add_noise(vid_lat, lat[:,:vid_frm], self.lat_timestep)
         lat *= self.scheduler.init_noise_sigma
@@ -189,15 +193,13 @@ class CogX:
         bs = 1 if self.a.cfg_scale in [0,1] else 2
         steps = self.set_steps(self.a.steps, strength = self.a.strength)
 
-        lat_ch = self.transformer.config.in_channels
-        if isset(self.a, 'img2vid'): lat_ch = lat_ch // 2
-        lat, img_lat = self.make_lat(self.a.num, lat_ch, num_frames, H, W, image, imgpos, video, dtype=cs.dtype)
+        lat, img_lat = self.make_lat(self.a.num, num_frames, H, W, image, imgpos, video, dtype=cs.dtype)
         fcount = lat.size(1)
         img_rot_emb = self.get_rot_pos_emb(H, W, self.a.ctx_frames) if self.transformer.config.use_rotary_positional_embeddings else None
 
         def calc_noise(x, t, conds, img_rot_emb):
             noise_pred = self.transformer(x, conds, t.expand(x.shape[0]), image_rotary_emb=img_rot_emb).sample
-            if len(x) > 1 and len(conds) > 1:
+            if len(x) > 1 and len(conds) > 1: # cfguidance
                 cfg_scale = 1 + self.a.cfg_scale * ((1 - math.cos(math.pi * ((steps - t.item()) / steps) ** 5.)) / 2) if self.a.dyn_cfg else self.a.cfg_scale
                 noise_un, noise_c = noise_pred.chunk(bs)
                 noise_pred = noise_un + cfg_scale * (noise_c - noise_un)
@@ -207,7 +209,7 @@ class CogX:
         old_pred = None # for DPM-solver++
         for i, t in enumerate(self.timesteps):
             lat_in = self.scheduler.scale_model_input(lat, t)
-            lat_in = torch.cat([lat_in] * bs) # [2,13,16,60,90]
+            lat_in = torch.cat([lat_in] * bs) # [2,L,c,h,w]
             if isset(self.a, 'img2vid'):
                 lat_img_in = torch.cat([img_lat] * bs)
                 lat_in = torch.cat([lat_in, lat_img_in], dim=2)
@@ -218,7 +220,7 @@ class CogX:
                 for slids in uniform_slide(i, fcount, self.a.ctx_frames, self.a.ctx_over, loop=self.a.loop):
                     if self.a.rot_emb and img_rot_emb is not None: img_rot_emb = self.get_rot_pos_emb(H, W, time_ids = slids)
                     noise_pred_sub = calc_noise(lat_in[:,slids], t, cs, img_rot_emb)
-                    noise_pred[:,slids] += noise_pred_sub
+                    noise_pred[:,slids] += noise_pred_sub[:,:len(slids)]
                     slide_count[:,slids] += 1 # increment which indices were used
                 noise_pred /= slide_count
             else: # single context video
@@ -235,45 +237,46 @@ class CogX:
         return video
 
 # slightly edited diffusers.models.embeddings.get_3d_rotary_pos_embed
-def get_3d_rot_pos_emb(embed_dim, crops_coords, h, w, time_ids, theta=10000, use_real=True): # RoPE for video tokens with 3D structure.
+def get_3d_rot_pos_emb(embed_dim, crops_coords, h, w, time_ids, theta=10000, use_real=True, rep_inter_real=True): # RoPE for video tokens with 3D structure.
     # embed_dim = hidden_size_head, theta = Scaling factor for frequency computation
     if not isinstance(time_ids, torch.Tensor): time_ids = torch.tensor(time_ids).float()
 
-    def make_freq(grid, dim):
-        freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-        return torch.einsum("n , f -> n f", grid, freqs).repeat_interleave(2, dim=-1)
-
     (h0, w0), (h1, w1) = crops_coords # top-left and bottom-right coordinates of the crop
-    grid_h = torch.arange(h0, h1, step = (h1-h0)/h, dtype=torch.float32)
-    grid_w = torch.arange(w0, w1, step = (w1-w0)/w, dtype=torch.float32)
-    grid_t = time_ids
-    freqs_t = make_freq(grid_t, embed_dim // 4)
-    freqs_h = make_freq(grid_h, embed_dim // 8 * 3)
-    freqs_w = make_freq(grid_w, embed_dim // 8 * 3)
+    steps_h, steps_w, steps_t = h1-h0, w1-w0, len(time_ids) # (h1-h0)//h, (w1-w0)//w, ..
 
-    def broadcast(tensors, dim=-1): # Broadcast and concatenate tensors along specified dimension
-        num_tensors = len(tensors)
-        shape_lens = {len(t.shape) for t in tensors}
-        assert len(shape_lens) == 1, "tensors must all have the same number of dimensions"
-        shape_len = list(shape_lens)[0]
-        dim = (dim + shape_len) if dim < 0 else dim
-        dims = list(zip(*(list(t.shape) for t in tensors)))
-        expandable_dims = [(i, val) for i, val in enumerate(dims) if i != dim]
-        assert all([*(len(set(t[1])) <= 2 for t in expandable_dims)]), "invalid dimensions for broadcastable concatenation"
-        max_dims = [(t[0], max(t[1])) for t in expandable_dims]
-        expanded_dims = [(t[0], (t[1],) * num_tensors) for t in max_dims]
-        expanded_dims.insert(dim, (dim, dims[dim]))
-        expandable_shapes = list(zip(*(t[1] for t in expanded_dims)))
-        tensors = [t[0].expand(*t[1]) for t in zip(tensors, expandable_shapes)]
-        return torch.cat(tensors, dim=dim)
+    def make_freq(grid, dim):
+        freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float()[: (dim//2)] / dim))
+        freqs = torch.outer(grid, freqs) # [S, D/2]
+        if use_real and rep_inter_real: # flux, hunyuan-dit, cogvideox
+            freqs_cos = freqs.cos().repeat_interleave(2, dim=1) # [S,D]
+            freqs_sin = freqs.sin().repeat_interleave(2, dim=1) # [S,D]
+            return freqs_cos, freqs_sin
+        elif use_real: # stable audio
+            freqs_cos = torch.cat([freqs.cos(), freqs.cos()], dim=-1) # [S,D]
+            freqs_sin = torch.cat([freqs.sin(), freqs.sin()], dim=-1) # [S,D]
+            return freqs_cos, freqs_sin
+        else: # lumina
+            freqs_cis = torch.polar(torch.ones_like(freqs), freqs) # [S, D/2] not float?
+            return freqs_cis
 
-    freqs = broadcast((freqs_t[:, None, None, :], freqs_h[None, :, None, :], freqs_w[None, None, :, :]), dim=-1) # [13,30,45,64] t h w d
-    t, h, w, d = freqs.shape
-    freqs = freqs.view(t * h * w, d)
-    sin = freqs.sin()
-    cos = freqs.cos()
-    if use_real: return cos, sin # real and imaginary parts separately, [len(time_ids) * h * w, embed_dim/2]
-    else:        return torch.polar(torch.ones_like(freqs), freqs) # complex numbers
+    # BroadCast and concatenate temporal and spaial frequencie (height and width) into a 3d tensor
+    def combine_thw(freqs_t, freqs_h, freqs_w):
+        freqs_t = freqs_t[:, None, None, :].expand(-1, steps_h, steps_w, -1)  # steps_t, steps_h, steps_w, dim_t
+        freqs_h = freqs_h[None, :, None, :].expand(steps_t, -1, steps_w, -1)  # steps_t, steps_h, steps_w, dim_h
+        freqs_w = freqs_w[None, None, :, :].expand(steps_t, steps_h, -1, -1)  # steps_t, steps_h, steps_w, dim_w
+        freqs = torch.cat([freqs_t, freqs_h, freqs_w], dim=-1)  # steps_t, steps_h, steps_w, (dim_t + dim_h + dim_w)
+        freqs = freqs.view(steps_t * steps_h * steps_w, -1)  # (steps_t * steps_h * steps_w), (dim_t + dim_h + dim_w)
+        return freqs
+
+    grid_t = time_ids # [0..12]
+    grid_h = torch.arange(h0, h1, dtype=torch.float32) # step = steps_h
+    grid_w = torch.arange(w0, w1, dtype=torch.float32) # step = steps_w
+    t_cos, t_sin = make_freq(grid_t, embed_dim // 4)     # freqs_t  [steps_t, dim_t] [13,16]
+    h_cos, h_sin = make_freq(grid_h, embed_dim // 8 * 3) # freqs_h  [steps_h, dim_h] [30,24]
+    w_cos, w_sin = make_freq(grid_w, embed_dim // 8 * 3) # freqs_w  [steps_w, dim_w] [45,24]
+    cos = combine_thw(t_cos, h_cos, w_cos)
+    sin = combine_thw(t_sin, h_sin, w_sin)
+    return cos, sin
 
 def get_resize_crop_region_for_grid(h, w, th, tw):
     if h/w > th/tw:
@@ -323,19 +326,20 @@ def main():
         assert os.path.exists(a.in_img), "Not found %s" % a.in_img
         img_paths = img_list(a.in_img) if os.path.isdir(a.in_img) else [a.in_img]
         in_img = [load_image(f) for f in img_paths]
-        if isset(a, 'fstep') and not isset(a, 'frames'): a.frames = a.fstep * len (in_img)
+        if isset(a, 'fstep') and not isset(a, 'frames'): a.frames = a.fstep * len(in_img)
         a.img2vid = True
 
     elif isset(a, 'in_vid'):
         assert os.path.exists(a.in_vid), "Not found %s" % a.in_vid
         in_vid = load_video(a.in_vid) # list of pil
-        if isset(a, 'frames'): 
-            if isset(a, 'overlap'):
-                start_vid = in_vid[:-a.overlap]
-                in_vid = in_vid[-a.overlap:]
-            elif a.frames < len(in_vid): 
-                in_vid = in_vid[:a.frames]
-        if not isset(a, 'frames'): a.frames = len(in_vid)
+        if isset(a, 'overlap'):
+            start_vid = in_vid[:-a.overlap]
+            in_vid = in_vid[-a.overlap:]
+            assert isset(a, 'frames') and a.frames > len(in_vid), '!! Set video length higher than overlap %d' % len(in_vid)
+        elif isset(a, 'frames') and a.frames < len(in_vid):
+            in_vid = in_vid[:a.frames]
+        if not isset(a, 'frames'):
+            a.frames = len(in_vid)
         if a.frames > len(in_vid): a.img2vid = True
 
     cogx = CogX(a)
@@ -343,28 +347,26 @@ def main():
 
     W, H = [720,480] if a.size is None else [int(s) for s in a.size.split('-')]
     # [x * cogx.vae_scale_s for x in [cogx.transformer.config.sample_width, cogx.transformer.config.sample_height]]
-    a.in_txt = [''.join([a.pretxt, s, a.postxt]) for s in read_txt(a.in_txt)]
+    if not isset(a, 'frames'): a.frames = 49
     if a.verbose: save_cfg(a, a.out_dir)
-    count = 1
 
+    a.in_txt = ['. '.join([a.pretxt, s, a.postxt]) for s in read_txt(a.in_txt)]
     cs = cogx.encode_prompt(a.in_txt, a.unprompt, a.num) # [2,226,4096]
 
     if isset(a, 'in_img'):
-        in_img = cogx.video_processor.preprocess(in_img, height=H, width=W).to(device, dtype=cs.dtype)
+        in_img = cogx.video_processor.preprocess(in_img, height=H, width=W).to(device, dtype=cs.dtype) # [n,c,h,w]
         gendict['image'] = in_img
 
     if isset(a, 'in_vid'):
-        video = cogx.video_processor.preprocess_video(in_vid, height=H, width=W).to(device, dtype=cs.dtype)
+        video = cogx.video_processor.preprocess_video(in_vid, height=H, width=W).to(device, dtype=cs.dtype) # [b,c,f,h,w]
         if isset(a, 'overlap'):
             start_vid = cogx.video_processor.preprocess_video(start_vid, height=H, width=W).to(device, dtype=cs.dtype) / 2 + 0.5
         gendict['video'] = video
 
-    if not isset(a, 'frames'): a.frames = 49
-
-    video = cogx.generate(cs, H, W, a.frames, **gendict)[0] # [b,f,c,h,w]
+    video = cogx.generate(cs, H, W, a.frames, **gendict)[0] # [f,c,h,w]
 
     if isset(a, 'in_vid') and isset(a, 'overlap'):
-        video = torch.cat([start_vid.permute(0,2,1,3,4)[0], video])
+        video = torch.cat([start_vid.permute(0,2,1,3,4)[0], video]) # [f,c,h,w]
 
     outname = []
     if isset(a, 'in_vid'): outname += [basename(a.in_vid)]

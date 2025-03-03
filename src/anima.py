@@ -70,24 +70,16 @@ def main():
             frames = imageio.mimread(a.in_vid, memtest=False)
         if isset(a, 'frames'): frames = frames[:a.frames]
         a.frames = len(frames)
-        video = torch.from_numpy(np.stack(frames)).movedim(3,1).to(sd.device, dtype=sd.dtype) / 127.5 - 1. # [f,c,h,w]
-        size = list(video.shape[-2:])
+        video = torch.from_numpy(np.stack(frames)).movedim(3,1).to(dtype=sd.dtype) / 127.5 - 1. # [f,c,h,w]
+        if not a.lowmem: video = video.to(sd.device)
+        if not isset(a, 'size'): a.size = list(video.shape[-2:])
     else:
         if isset(a, 'fstep') and not isset(a, 'frames'): 
             a.frames = count * a.fstep
-        if isset(a, 'in_img') and os.path.isfile(a.in_img):
-            size = load_img(a.in_img)[0].shape[-2:] # [:-3:-1] # last 2 reverted
-        else:
-            size = [sd.res, sd.res]
-    if a.frames is None: a.frames = a.ctx_frames
-    if not isset(a, 'size'): a.size = size[::-1]
+        if isset(a, 'in_img') and os.path.isfile(a.in_img) and not isset(a, 'size'):
+            a.size = load_img(a.in_img)[1]
+    if not isset(a, 'size'): a.size = [sd.res, sd.res]
     W, H = calc_size(a.size, pad=True)
-
-    cs = sum([csb[:,j] * cwb[:,j,None,None] for j in range(csb.shape[1])]) # [num,77,768]
-    cs_frames = framestack(cs, a.frames, a.curve, a.loop) # [f,77,768]
-    uc_frames = uc.repeat(a.frames,1,1)
-    if len(img_conds) > 0:
-        gendict['c_img'] = [framestack(img_cond, a.frames, a.curve, a.loop, rejoin=True) for img_cond in img_conds]
 
     if sd.use_cnet and isset(a, 'control_img'):
         cn_imgs_all = []
@@ -96,21 +88,30 @@ def main():
         for cn_img, cnet_mod in zip(control_imgs, sd.cns):
             assert os.path.exists(cn_img), f"!! ControlNet image(s) {cn_img} not found !!"
             dual8b = basename(cnet_mod) == 'deptha' # 16bit
-            if os.path.isdir(cn_img):
-                cn_imgs = [load_img(path, (W,H), dual8b=dual8b)[0] for path in img_list(cn_img)]
-            else:
-                cn_imgs = [load_img(cn_img, (W,H), dual8b=dual8b)[0]]
+            cn_list = img_list(cn_img) if os.path.isdir(cn_img) else [cn_img]
+            cn_imgs = [load_img(ci, (W,H), dual8b=dual8b)[0] for ci in cn_list] # [-1..1] [n,c,h,w]
             if isset(a, 'frames'):
                 cn_imgs = cn_imgs[:a.frames]
             else:
                 a.frames = max(a.ctx_frames, len(cn_imgs))
-            cn_imgs = torch.cat(cn_imgs) / 2. + 0.5  # [0..1] [n,c,h,w]
+            cn_imgs = torch.cat(cn_imgs, dim=0) / 2. + 0.5  # [0..1] [n,c,h,w]
             if len(cn_imgs) == 1:
-                cn_imgs = cn_imgs.repeat(a.frames,1,1,1)
+                cn_imgs = cn_imgs.repeat_interleave(a.frames, dim=0)
             elif len(cn_imgs) < a.frames:
                 print(f"!! Not enough ControlNet images for model {sd.cns[i]}: {len(cn_imgs)}, total frame count {a.frames} !!"); exit()
             cn_imgs_all.append(cn_imgs)
         gendict['cnimg'] = cn_imgs_all
+
+    if a.frames is None: a.frames = a.ctx_frames
+    if isset(a, 'in_img') and os.path.isfile(a.in_img) and not isset(a, 'in_vid'):
+        video = torch.cat([load_img(a.in_img, [W,H])[0]] * a.frames) # [f,c,h,w]
+        a.in_vid = a.in_img
+
+    cs = sum([csb[:,j] * cwb[:,j].unsqueeze(-1).unsqueeze(-1) for j in range(csb.shape[1])]) # [num,77,768]
+    cs_frames = framestack(cs, a.frames, a.curve, a.loop) # [f,77,768]
+    uc_frames = torch.cat([uc] * a.frames, dim=0)
+    if len(img_conds) > 0:
+        gendict['c_img'] = [framestack(img_cond, a.frames, a.curve, a.loop, rejoin=True) for img_cond in img_conds]
 
     if a.verbose: 
         print('.. frames', a.frames, '.. model', a.model, '..', a.sampler, '..', '%dx%d' % (W,H), '..', a.cfg_scale, '..', a.strength, '..', sd.seed)
@@ -123,15 +124,15 @@ def main():
         z_ = sd.img_z(video) # [f,c,h,w]
         z_ = z_.movedim(1,0).unsqueeze(0) # [1,c,f,h,w]
     else:
-        sd.set_steps(a.steps, 1)
+        sd.set_steps(a.steps, a.strength)
         z_ = sd.rnd_z(H, W, a.frames) # [1,c,f,h,w]
 
     video = sd.generate(z_, cs_frames, uc_frames, **gendict).squeeze(0) # [c,f,h,w]
 
     images = img_out(video)
     for i, image in enumerate(images):
-        if isset(a, 'in_vid') and list(image.shape[:2]) != size: # if input padded
-            image = image[:size[0], :size[1]]
+        if isset(a, 'in_vid') and list(image.shape[:2]) != [H, W]: # if input padded
+            image = image[:H, :W]
         imageio.imsave(os.path.join(a.out_dir, '%04d.jpg' % i), image)
 
 

@@ -83,9 +83,26 @@ def main():
     if a.verbose: save_cfg(a, a.out_dir)
     if a.verbose: print(' kandinsky ..', a.cfg_scale, '..', a.strength, '..', a.seed)
 
-    prompts, texts = read_multitext(a.in_txt, a.pretxt, a.postxt)
-    un = unprompt(a)
-    count = len(prompts)
+    # get all prompts
+    prompts, imrefs, texts, count = [], [], [], 0
+    if isset(a, 'in_txt'):
+        prompts, texts = read_multitext(a.in_txt, a.pretxt, a.postxt)
+        count = max(len(prompts), count)
+    if isset(a, 'img_ref'):
+        imrefs = img_list(a.img_ref) if os.path.isdir(a.img_ref) else [a.img_ref]
+        assert all([os.path.isfile(im) for im in imrefs]), "Reference image(s) not found"
+        if not isset(a, 'weight_ref'): a.weight_ref = 1.
+        if a.mix_all: # all images at once
+            a.weight_ref /= len(imrefs)
+            imrefs = [[(load_img(im, (224,224))[0], a.weight_ref) for im in imrefs]]
+            count = max(1, count)
+        else: # one image per line
+            imrefs = [[(load_img(im, (224,224))[0], a.weight_ref)] for im in imrefs]
+            count = max(len(imrefs), count)
+    if len(prompts) == 0: # only images as prompts
+        prompts = imrefs
+    elif len(imrefs) > 0: # both images and text prompts
+        prompts = [prompts[i % len(prompts)] + imrefs[i % len(imrefs)] for i in range(count)]
 
     # prior pipe
     if isset(a, 'in_img') and isset(a, 'control_img'): # img2img + controlnet
@@ -130,8 +147,8 @@ def main():
         depth_estimator = pipeline("depth-estimation")
         def make_depth(image):
             image = depth_estimator(image)["depth"]
-            image = np.array(image)[:,:,None]
-            depth = torch.from_numpy(image).repeat(1,1,3).permute(2,0,1).float() / 255.
+            image = np.expand_dims(np.array(image), axis=-1)
+            depth = torch.from_numpy(image).repeat_interleave(3, dim=-1).permute(2,0,1).float() / 255.
             return depth
 
     def genmix(tuples, W, H, tt=0, img=None, cimg=None, mask=None):

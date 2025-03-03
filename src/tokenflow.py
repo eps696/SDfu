@@ -275,7 +275,7 @@ def edit(sd, lats, cnet_conds, a):
     alpha_prod_T = sd.scheduler.alphas_cumprod[last_lat_step]
     mu_T, sigma_T = alpha_prod_T ** 0.5, (1 - alpha_prod_T) ** 0.5
     ddim_eps = (noisy_lats - mu_T * lats) / sigma_T
-    ddim_eps = ddim_eps.to(torch.float16).to(device)
+    ddim_eps = ddim_eps.to(device, dtype=dtype)
 
     print(' editing..')
     editor = TokenFlow(sd, a.in_txt, a.src_txt, a.unprompt, cnet_conds, a.lat_dir, a.cfg_scale, a.batch_size)

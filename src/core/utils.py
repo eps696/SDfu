@@ -117,7 +117,6 @@ def slerp2(v0, v1, x):
     z2_norm = torch.norm(v1)
     z2_normal = v1 * (z1_norm / z2_norm)
     vectors = []
-    interplain = v0 + (v1 - v0) * x
     interp = v0 + (z2_normal - v0) * x
     interp_norm = torch.norm(interp)
     interpol_normal = interp * (z1_norm / interp_norm)
@@ -171,7 +170,7 @@ def load_img(path, size=None, tensor=True, quant=8, pad=False, gpu=True, dual8b=
     else:
         image = np.array(image).astype(np.float32) / 255.
     image = torch.from_numpy(image).permute(2,0,1).unsqueeze(0)
-    if gpu: image = image.to(device, dtype=torch.float16)
+    if gpu: image = image.to(device, dtype=dtype)
     return 2.*image - 1., (w,h)
 
 def save_img(image, num, out_dir, prefix='', filepath=None, ext='jpg'):

@@ -528,6 +528,7 @@ def main():
         assert (count==len(prompts) or count==0), "%d images but %d prompts!" % (len(img_paths), len(prompts))
         count = len(prompts)
     else:
+        assert count > 0, "No images and no prompts?"
         promptr = Captur(os.path.join(a.maindir, 'xtra/cogflor22l'))
 
     pbar = progbar(count)

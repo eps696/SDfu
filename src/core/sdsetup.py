@@ -297,12 +297,11 @@ class SDfu:
         if self.use_lcm:
             self.scheduler.set_timesteps(steps, device, strength=strength)
             self.timesteps = self.scheduler.timesteps
-            self.lat_timestep = self.timesteps[:1].expand(self.a.batch, -1) # MPS-friendly expand
         else:
             self.scheduler.set_timesteps(steps, device=device)
             steps = min(int(steps * strength), steps) # t_enc .. 50
             self.timesteps = self.scheduler.timesteps[-steps - warmup :] # 1 warmup step
-            self.lat_timestep = self.timesteps[:1].expand(self.a.batch, -1) # MPS-friendly expand
+        self.lat_timestep = self.timesteps[:1].expand(self.a.batch, -1) # MPS-friendly expand
 
     def next_step_ddim(self, noise, t, sample):
         t, next_t = min(t - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), t
@@ -459,7 +458,7 @@ class SDfu:
         loop_context = self.unet.mid_block.attentions[0].register_forward_hook(get_map_size) if self.a.sag_scale > 0 else nullcontext() # SAG
         with torch.no_grad(), self.run_scope(device), loop_context:
             if cws is None or not len(cws) == len(cs): cws = [len(uc) / len(cs)] * len(cs)
-            conds = uc if cfg_scale==0 else cs if cfg_scale==1 else torch.cat([uc, cs]) if ilat is None else torch.cat([uc, uc, cs]) 
+            conds = uc if cfg_scale==0 else cs if cfg_scale==1 else torch.cat([uc,cs], dim=0) if ilat is None else torch.cat([uc,uc,cs], dim=0)
             if self.a.batch > 1: conds = conds.repeat_interleave(self.a.batch, 0)
             bs = len(conds) // (len(uc) * self.a.batch)
             if cnimg is not None and len(lat.shape)==4: cnimg = [ci.repeat_interleave(len(conds) // len(ci), 0) for ci in cnimg]
@@ -487,7 +486,7 @@ class SDfu:
                 elif isok(depth) and self.depthmod: # depth model
                     lat_in = torch.cat([lat_in, depth], dim=1)
 
-                lat_in = torch.cat([lat_in] * bs) # expand latents for guidance
+                lat_in = torch.cat([lat_in] * bs, dim=0) # expand latents for guidance
 
                 if c_img is not None: # encoded img for ip adapter
                     ukwargs['added_cond_kwargs'] = {"image_embeds": img_conds}
@@ -548,9 +547,9 @@ class SDfu:
                         noise_pred = torch.zeros_like(lat)
                         slide_count = torch.zeros((1, 1, lat_in.shape[2], 1, 1), device=lat_in.device)
                         for slids in uniform_slide(tnum, frames, ctx_size=self.a.ctx_frames, loop=self.a.loop):
-                            conds_ = conds if 'vzs' in self.a.model else conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)])
+                            conds_ = conds if 'vzs' in self.a.model else conds[slids] if cfg_scale in [0,1] else torch.cat([cc[slids] for cc in conds.chunk(bs)], dim=0)
                             if c_img is not None: # ip adapter
-                                ukwargs['added_cond_kwargs']['image_embeds'] = [torch.cat([cc[slids] for cc in imcond.chunk(bs)]) for imcond in img_conds]
+                                ukwargs['added_cond_kwargs']['image_embeds'] = [torch.cat([cc[slids] for cc in imcond.chunk(bs)], dim=0) for imcond in img_conds]
                                 if self.a.sag_scale > 0:
                                     imcc = img_conds if cfg_scale in [0,1] else img_uncond
                                     sagkwargs['added_cond_kwargs']['image_embeds'] = [imcond[slids] for imcond in imcc]
@@ -587,7 +586,7 @@ class SDfu:
             if len(lat.shape)==5: # video
                 lat = lat.permute(0,2,1,3,4).squeeze(0).to(dtype=dtype) # [f,c,h,w]
                 output = torch.cat([self.vae.decode(lat[b : b + self.a.vae_batch]).sample.float().cpu() for b in range(0, len(lat), self.a.vae_batch)])
-                output = output[None,:].permute(0,2,1,3,4) # [1,c,f,h,w]
+                output = output.unsqueeze(0).permute(0,2,1,3,4) # [1,c,f,h,w]
             else: # image
                 output = self.vae.decode(lat).sample
 

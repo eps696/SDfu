@@ -167,8 +167,7 @@ def multiprompt(pipe, in_txt, pretxt='', postxt='', repeat=1):
         embeds += [embatch]
         wts = torch.Tensor(prompt[1])
         weights += [wts] # or [wts / wts.sum()] ?
-    # MPS-friendly expand using repeat_interleave with explicit tensor copy
-    embeds = torch.stack(embeds).repeat_interleave(repeat, dim=0)
-    weights = torch.stack(weights).repeat_interleave(repeat, dim=0).to(embeds.device, dtype=embeds.dtype)
+    embeds  = torch.cat([torch.stack(embeds)] * repeat, dim=0) # [num,b,77,768]
+    weights = torch.cat([torch.stack(weights)] * repeat, dim=0).to(embeds.device, dtype=embeds.dtype) # [num,b]
     return embeds, weights, texts
 
