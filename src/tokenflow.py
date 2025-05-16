@@ -324,7 +324,7 @@ def main():
         try:
             save_video(os.path.join(a.out_dir, 'out'), fps=8)
         except:
-            print("Cannot export video (pyav not installed?), exiting")
+            pass
 
 
 if __name__ == '__main__':
