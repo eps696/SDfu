@@ -54,7 +54,8 @@ pip install -r requirements.txt
 ```
 
 Run command below to download: Stable Diffusion [1.5](https://huggingface.co/CompVis/stable-diffusion), [1.5 Dreamlike Photoreal](https://huggingface.co/dreamlike-art/dreamlike-photoreal-2.0), [2-inpaint](https://huggingface.co/stabilityai/stable-diffusion-2-inpainting), 
-[custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [IP adapters] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading). Licensing info is available on their webpages.
+[custom VAE](https://huggingface.co/stabilityai/sd-vae-ft-ema), [LCM], [ZeroScope], [AnimateDiff] v3, [ControlNet], [IP adapters] with CLIPVision, [CLIPseg] models (converted to `float16` for faster loading).  
+Please pay attention to the licensing info for these and other referenced models which is available on their webpages.
 ```
 python download.py
 ```
